@@ -204,32 +204,64 @@ struct chiptune_preset_t {
     uint8_t volume;
 };
 
+/*
+ * Presets inspired by classic NES/GB game sounds.
+ * Fields: name, chip, alloc_mode, duty, env_attack, env_decay, sweep,
+ *         vibrato_depth, vibrato_rate, noise_mode, wavetable_idx,
+ *         channel_mask, detune, volume
+ *
+ * Duty: 0=12.5% (thin), 1=25% (bright), 2=50% (round), 3=75% (same as 25%)
+ * Envelope: attack 0=instant, decay 0=instant..15=~1s
+ * Channel mask: bit0=pulse1/sq1, bit1=pulse2/sq2, bit2=tri/wave, bit3=noise
+ */
 static const chiptune_preset_t g_factory_presets[NUM_PRESETS] = {
-    /* NES presets */
-    /*  0 */ {"NES Square Lead",   CHIP_NES, ALLOC_AUTO,   2, 0,  8, 0, 0, 0, 0, 0, 0x03,  0, 12},
-    /*  1 */ {"NES Bright Lead",   CHIP_NES, ALLOC_LEAD,   1, 0,  6, 0, 0, 0, 0, 0, 0x01,  0, 12},
-    /*  2 */ {"NES Thin Lead",     CHIP_NES, ALLOC_LEAD,   0, 0,  5, 0, 0, 0, 0, 0, 0x01,  0, 12},
-    /*  3 */ {"NES Duo Lead",      CHIP_NES, ALLOC_AUTO,   2, 0,  8, 0, 0, 0, 0, 0, 0x03, 10, 11},
+    /* ---- NES presets ---- */
+    /* Mega Man style: 50% duty, quick decay for punchy melodic lines */
+    /*  0 */ {"NES Square Lead",   CHIP_NES, ALLOC_LEAD,   2, 0, 10, 0, 0, 0, 0, 0, 0x01,  0, 13},
+    /* Castlevania style: 25% duty, brighter and more cutting */
+    /*  1 */ {"NES Bright Lead",   CHIP_NES, ALLOC_LEAD,   1, 0, 10, 0, 0, 0, 0, 0, 0x01,  0, 12},
+    /* DuckTales style: 12.5% duty, thin and nasal */
+    /*  2 */ {"NES Thin Lead",     CHIP_NES, ALLOC_LEAD,   0, 0,  8, 0, 0, 0, 0, 0, 0x01,  0, 11},
+    /* Two detuned pulse channels for thick unison (Mega Man boss music) */
+    /*  3 */ {"NES Duo Lead",      CHIP_NES, ALLOC_AUTO,   2, 0, 10, 0, 0, 0, 0, 0, 0x03,  8, 12},
+    /* Mario/Mega Man bass: triangle with long decay */
     /*  4 */ {"NES Triangle Bass", CHIP_NES, ALLOC_LEAD,   2, 0, 12, 0, 0, 0, 0, 0, 0x04,  0, 15},
+    /* Deep sub bass: triangle, very long sustain */
     /*  5 */ {"NES Tri Sub",       CHIP_NES, ALLOC_LEAD,   2, 0, 15, 0, 0, 0, 0, 0, 0x04,  0, 15},
-    /*  6 */ {"NES Vibrato Lead",  CHIP_NES, ALLOC_LEAD,   2, 0, 10, 0, 4, 5, 0, 0, 0x01,  0, 12},
-    /*  7 */ {"NES Noise Hat",     CHIP_NES, ALLOC_LEAD,   0, 0,  2, 0, 0, 0, 1, 0, 0x08,  0, 10},
-    /*  8 */ {"NES Noise Snare",   CHIP_NES, ALLOC_LEAD,   0, 0,  5, 0, 0, 0, 0, 0, 0x08,  0, 12},
-    /*  9 */ {"NES Power Chord",   CHIP_NES, ALLOC_AUTO,   2, 0,  8, 0, 0, 0, 0, 0, 0x03,  0, 11},
+    /* Final Fantasy style melody with gentle vibrato */
+    /*  6 */ {"NES Vibrato Lead",  CHIP_NES, ALLOC_LEAD,   2, 0, 12, 0, 3, 5, 0, 0, 0x01,  0, 12},
+    /* Closed hi-hat: short metallic noise (short mode) */
+    /*  7 */ {"NES Noise Hat",     CHIP_NES, ALLOC_LEAD,   0, 0,  1, 0, 0, 0, 1, 0, 0x08,  0, 12},
+    /* Snare: longer white noise burst */
+    /*  8 */ {"NES Noise Snare",   CHIP_NES, ALLOC_LEAD,   0, 0,  3, 0, 0, 0, 0, 0, 0x08,  0, 13},
+    /* Power fifth: two pulse channels a fifth apart */
+    /*  9 */ {"NES Power Chord",   CHIP_NES, ALLOC_AUTO,   2, 0, 10, 0, 0, 0, 0, 0, 0x03,  0, 12},
+    /* Full paraphonic: all 4 channels for chords + bass + drums */
     /* 10 */ {"NES Full Kit",      CHIP_NES, ALLOC_LOCKED, 2, 0,  8, 0, 0, 0, 0, 0, 0x0F,  0, 12},
 
-    /* GB presets */
-    /* 11 */ {"GB Square Lead",    CHIP_GB,  ALLOC_AUTO,   2, 0,  8, 0, 0, 0, 0, 0, 0x03,  0, 12},
-    /* 12 */ {"GB Sweep Lead",     CHIP_GB,  ALLOC_LEAD,   2, 0,  8, 3, 0, 0, 0, 0, 0x01,  0, 12},
-    /* 13 */ {"GB Pulse Duo",      CHIP_GB,  ALLOC_AUTO,   2, 0,  8, 0, 0, 0, 0, 0, 0x03, 10, 11},
-    /* 14 */ {"GB Wave Bass",      CHIP_GB,  ALLOC_LEAD,   2, 0, 10, 0, 0, 0, 0, 0, 0x04,  0, 15},
-    /* 15 */ {"GB Wave Pad",       CHIP_GB,  ALLOC_AUTO,   2, 6, 12, 0, 2, 4, 0, 3, 0x04,  0, 12},
-    /* 16 */ {"GB Wave Growl",     CHIP_GB,  ALLOC_LEAD,   2, 0,  6, 0, 0, 0, 0, 6, 0x04,  0, 13},
-    /* 17 */ {"GB Noise Hat",      CHIP_GB,  ALLOC_LEAD,   0, 0,  2, 0, 0, 0, 1, 0, 0x08,  0, 10},
-    /* 18 */ {"GB Noise Snare",    CHIP_GB,  ALLOC_LEAD,   0, 0,  5, 0, 0, 0, 0, 0, 0x08,  0, 12},
+    /* ---- GB presets ---- */
+    /* Pokemon battle style: 50% duty, clean square lead */
+    /* 11 */ {"GB Square Lead",    CHIP_GB,  ALLOC_LEAD,   2, 0, 10, 0, 0, 0, 0, 0, 0x01,  0, 13},
+    /* Zelda style: sweep down on note attack */
+    /* 12 */ {"GB Sweep Lead",     CHIP_GB,  ALLOC_LEAD,   2, 0, 10, 3, 0, 0, 0, 0, 0x01,  0, 12},
+    /* Two detuned squares for thick chorus effect */
+    /* 13 */ {"GB Pulse Duo",      CHIP_GB,  ALLOC_AUTO,   2, 0, 10, 0, 0, 0, 0, 0, 0x03,  8, 12},
+    /* Zelda bass: sawtooth wave channel, long decay */
+    /* 14 */ {"GB Wave Bass",      CHIP_GB,  ALLOC_LEAD,   2, 0, 12, 0, 0, 0, 0, 0, 0x04,  0, 15},
+    /* Soft pad: triangle wave with slow attack and vibrato */
+    /* 15 */ {"GB Wave Pad",       CHIP_GB,  ALLOC_LEAD,   2, 5, 13, 0, 2, 4, 0, 2, 0x04,  0, 15},
+    /* Kirby bass: square wave with growl */
+    /* 16 */ {"GB Wave Growl",     CHIP_GB,  ALLOC_LEAD,   2, 0,  6, 0, 0, 0, 0, 6, 0x04,  0, 15},
+    /* Closed hi-hat: short metallic noise */
+    /* 17 */ {"GB Noise Hat",      CHIP_GB,  ALLOC_LEAD,   0, 0,  1, 0, 0, 0, 1, 0, 0x08,  0, 13},
+    /* Snare drum: longer noise burst */
+    /* 18 */ {"GB Noise Snare",    CHIP_GB,  ALLOC_LEAD,   0, 0,  3, 0, 0, 0, 0, 0, 0x08,  0, 13},
+    /* Full 4-channel kit for chords */
     /* 19 */ {"GB Full Kit",       CHIP_GB,  ALLOC_LOCKED, 2, 0,  8, 0, 0, 0, 0, 0, 0x0F,  0, 12},
-    /* 20 */ {"GB Chiptune",       CHIP_GB,  ALLOC_LOCKED, 2, 0,  8, 0, 1, 4, 0, 0, 0x0F,  0, 11},
-    /* 21 */ {"GB Vibrato Lead",   CHIP_GB,  ALLOC_LEAD,   2, 0,  8, 0, 5, 6, 0, 0, 0x01,  0, 12},
+    /* Classic chiptune: all channels, slight vibrato */
+    /* 20 */ {"GB Chiptune",       CHIP_GB,  ALLOC_LOCKED, 2, 0,  8, 0, 2, 4, 0, 0, 0x0F,  0, 12},
+    /* Vibrato melody lead (Final Fantasy style) */
+    /* 21 */ {"GB Vibrato Lead",   CHIP_GB,  ALLOC_LEAD,   2, 0, 12, 0, 3, 5, 0, 0, 0x01,  0, 13},
 };
 
 /* =====================================================================
@@ -250,6 +282,7 @@ struct voice_t {
     int channel_idx;   /* Which APU channel this voice is on (0-3) */
     int channel_type;  /* CHAN_PULSE1, CHAN_PULSE2, CHAN_TRIANGLE/WAVE, CHAN_NOISE */
     int age;
+    int triggered;     /* 1 = already triggered this note, skip re-trigger */
     voice_envelope_t env;
 };
 
@@ -663,52 +696,55 @@ static int find_voice_for_note(chiptune_instance_t *inst, int note) {
  * ===================================================================== */
 
 static void nes_write_pulse(chiptune_instance_t *inst, int chan_idx, int time,
-                            int duty, int vol, float freq) {
+                            int duty, int vol, float freq, int do_trigger) {
     /* chan_idx: 0 = pulse1 ($4000-$4003), 1 = pulse2 ($4004-$4007) */
     uint16_t base = (chan_idx == 0) ? 0x4000 : 0x4004;
 
     int period = nes_pulse_period(freq);
     /* $4000/$4004: duty | length counter halt | constant volume | volume */
     uint8_t reg0 = (uint8_t)(((duty & 0x03) << 6) | 0x30 | (vol & 0x0F));
-    /* $4001/$4005: sweep disabled */
-    uint8_t reg1 = 0x00;
-    /* $4002/$4006: period low */
-    uint8_t reg2 = (uint8_t)(period & 0xFF);
-    /* $4003/$4007: length counter load | period high */
-    uint8_t reg3 = (uint8_t)(0xF8 | ((period >> 8) & 0x07));
 
     inst->nes_apu.write_register(time, base + 0, reg0);
-    inst->nes_apu.write_register(time + 1, base + 1, reg1);
-    inst->nes_apu.write_register(time + 2, base + 2, reg2);
-    inst->nes_apu.write_register(time + 3, base + 3, reg3);
+    /* $4002/$4006: period low (safe to write every block) */
+    inst->nes_apu.write_register(time + 1, base + 2, (uint8_t)(period & 0xFF));
+    if (do_trigger) {
+        /* $4001/$4005: sweep disabled */
+        inst->nes_apu.write_register(time + 2, base + 1, 0x00);
+        /* $4003/$4007: length counter load | period high
+         * This resets the phase sequencer - only do it on note-on */
+        inst->nes_apu.write_register(time + 3, base + 3,
+            (uint8_t)(0xF8 | ((period >> 8) & 0x07)));
+    }
 }
 
-static void nes_write_triangle(chiptune_instance_t *inst, int time, int gate, float freq) {
+static void nes_write_triangle(chiptune_instance_t *inst, int time, int gate, float freq, int do_trigger) {
     int period = nes_triangle_period(freq);
     /* $4008: linear counter (0x7F = max length, bit 7 = control) */
     uint8_t reg8 = gate ? 0xFF : 0x80;
-    /* $400A: period low */
-    uint8_t regA = (uint8_t)(period & 0xFF);
-    /* $400B: length counter load | period high */
-    uint8_t regB = (uint8_t)(0xF8 | ((period >> 8) & 0x07));
 
     inst->nes_apu.write_register(time, 0x4008, reg8);
-    inst->nes_apu.write_register(time + 1, 0x400A, regA);
-    inst->nes_apu.write_register(time + 2, 0x400B, regB);
+    /* $400A: period low (safe to write every block) */
+    inst->nes_apu.write_register(time + 1, 0x400A, (uint8_t)(period & 0xFF));
+    if (do_trigger) {
+        /* $400B: length counter load | period high (resets linear counter) */
+        inst->nes_apu.write_register(time + 2, 0x400B,
+            (uint8_t)(0xF8 | ((period >> 8) & 0x07)));
+    }
 }
 
-static void nes_write_noise(chiptune_instance_t *inst, int time, int vol, int note, int short_mode) {
+static void nes_write_noise(chiptune_instance_t *inst, int time, int vol, int note, int short_mode, int do_trigger) {
     int period_idx = nes_noise_period_from_note(note);
     /* $400C: length halt | constant volume | volume */
     uint8_t regC = (uint8_t)(0x30 | (vol & 0x0F));
     /* $400E: mode | period */
     uint8_t regE = (uint8_t)((short_mode ? 0x80 : 0x00) | (period_idx & 0x0F));
-    /* $400F: length counter load */
-    uint8_t regF = 0xF8;
 
     inst->nes_apu.write_register(time, 0x400C, regC);
     inst->nes_apu.write_register(time + 1, 0x400E, regE);
-    inst->nes_apu.write_register(time + 2, 0x400F, regF);
+    if (do_trigger) {
+        /* $400F: length counter load */
+        inst->nes_apu.write_register(time + 2, 0x400F, 0xF8);
+    }
 }
 
 static void nes_silence_channel(chiptune_instance_t *inst, int chan_idx, int time) {
@@ -746,49 +782,48 @@ static void gb_load_wavetable(chiptune_instance_t *inst, int wave_idx, unsigned 
 }
 
 static void gb_write_square1(chiptune_instance_t *inst, unsigned time,
-                             int duty, int vol, float freq, int sweep) {
+                             int duty, int vol, float freq, int sweep, int do_trigger) {
     int freq_reg = gb_square_freq_reg(freq);
-    /* $FF10: sweep (period | negate | shift) */
-    uint8_t sweep_reg = 0x00;
-    if (sweep > 0) {
-        /* sweep up: period=sweep, negate=0, shift=2 */
-        sweep_reg = (uint8_t)(((sweep & 0x07) << 4) | 0x02);
+    /* $FF12: volume | direction(1=increase) | pace
+     * Volume in top 4 bits, pace=0 means hold (we use software envelope) */
+    apu_write_io(inst->gb_apu, 0xFF12, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
+    /* $FF13: freq low (safe to update every block) */
+    apu_write_io(inst->gb_apu, 0xFF13, (uint8_t)(freq_reg & 0xFF), time + 1);
+    if (do_trigger) {
+        /* Only write sweep, duty, and trigger on note-on */
+        uint8_t sweep_reg = 0x00;
+        if (sweep > 0) {
+            sweep_reg = (uint8_t)(((sweep & 0x07) << 4) | 0x02);
+        }
+        apu_write_io(inst->gb_apu, 0xFF10, sweep_reg, time + 2);
+        apu_write_io(inst->gb_apu, 0xFF11, (uint8_t)(((duty & 0x03) << 6) | 0x3F), time + 3);
+        /* $FF14: trigger | freq high */
+        apu_write_io(inst->gb_apu, 0xFF14, (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07)), time + 4);
+    } else {
+        /* Just update freq high without trigger */
+        apu_write_io(inst->gb_apu, 0xFF14, (uint8_t)((freq_reg >> 8) & 0x07), time + 2);
     }
-    /* $FF11: duty | length */
-    uint8_t reg11 = (uint8_t)(((duty & 0x03) << 6) | 0x3F);
-    /* $FF12: volume | direction(1=increase) | pace */
-    uint8_t reg12 = (uint8_t)(((vol & 0x0F) << 4) | 0x00);
-    /* $FF13: freq low */
-    uint8_t reg13 = (uint8_t)(freq_reg & 0xFF);
-    /* $FF14: trigger | length enable | freq high */
-    uint8_t reg14 = (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07));
-
-    apu_write_io(inst->gb_apu, 0xFF10, sweep_reg, time);
-    apu_write_io(inst->gb_apu, 0xFF11, reg11, time + 1);
-    apu_write_io(inst->gb_apu, 0xFF12, reg12, time + 2);
-    apu_write_io(inst->gb_apu, 0xFF13, reg13, time + 3);
-    apu_write_io(inst->gb_apu, 0xFF14, reg14, time + 4);
 }
 
 static void gb_write_square2(chiptune_instance_t *inst, unsigned time,
-                             int duty, int vol, float freq) {
+                             int duty, int vol, float freq, int do_trigger) {
     int freq_reg = gb_square_freq_reg(freq);
-    /* $FF16: duty | length */
-    uint8_t reg16 = (uint8_t)(((duty & 0x03) << 6) | 0x3F);
     /* $FF17: volume | direction | pace */
-    uint8_t reg17 = (uint8_t)(((vol & 0x0F) << 4) | 0x00);
-    /* $FF18: freq low */
-    uint8_t reg18 = (uint8_t)(freq_reg & 0xFF);
-    /* $FF19: trigger | length enable | freq high */
-    uint8_t reg19 = (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07));
-
-    apu_write_io(inst->gb_apu, 0xFF16, reg16, time);
-    apu_write_io(inst->gb_apu, 0xFF17, reg17, time + 1);
-    apu_write_io(inst->gb_apu, 0xFF18, reg18, time + 2);
-    apu_write_io(inst->gb_apu, 0xFF19, reg19, time + 3);
+    apu_write_io(inst->gb_apu, 0xFF17, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
+    /* $FF18: freq low (safe every block) */
+    apu_write_io(inst->gb_apu, 0xFF18, (uint8_t)(freq_reg & 0xFF), time + 1);
+    if (do_trigger) {
+        /* $FF16: duty | length */
+        apu_write_io(inst->gb_apu, 0xFF16, (uint8_t)(((duty & 0x03) << 6) | 0x3F), time + 2);
+        /* $FF19: trigger | freq high */
+        apu_write_io(inst->gb_apu, 0xFF19, (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07)), time + 3);
+    } else {
+        /* Just update freq high without trigger */
+        apu_write_io(inst->gb_apu, 0xFF19, (uint8_t)((freq_reg >> 8) & 0x07), time + 2);
+    }
 }
 
-static void gb_write_wave(chiptune_instance_t *inst, unsigned time, int vol, float freq) {
+static void gb_write_wave(chiptune_instance_t *inst, unsigned time, int vol, float freq, int do_trigger) {
     int freq_reg = gb_wave_freq_reg(freq);
     /* GB wave volume: 0=mute, 1=100%, 2=50%, 3=25% */
     int wave_vol;
@@ -797,26 +832,35 @@ static void gb_write_wave(chiptune_instance_t *inst, unsigned time, int vol, flo
     else if (vol >= 4) wave_vol = 3;   /* 25% */
     else wave_vol = 0;                 /* mute */
 
-    /* $FF1C: volume select */
+    /* $FF1C: volume select (safe every block) */
     apu_write_io(inst->gb_apu, 0xFF1C, (uint8_t)((wave_vol & 0x03) << 5), time);
-    /* $FF1D: freq low */
+    /* $FF1D: freq low (safe every block) */
     apu_write_io(inst->gb_apu, 0xFF1D, (uint8_t)(freq_reg & 0xFF), time + 1);
-    /* $FF1E: trigger | length enable | freq high */
-    apu_write_io(inst->gb_apu, 0xFF1E, (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07)), time + 2);
+    if (do_trigger) {
+        /* $FF1A: DAC enable */
+        apu_write_io(inst->gb_apu, 0xFF1A, 0x80, time + 2);
+        /* $FF1E: trigger | freq high */
+        apu_write_io(inst->gb_apu, 0xFF1E, (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07)), time + 3);
+    } else {
+        /* Just update freq high without trigger */
+        apu_write_io(inst->gb_apu, 0xFF1E, (uint8_t)((freq_reg >> 8) & 0x07), time + 2);
+    }
 }
 
-static void gb_write_noise(chiptune_instance_t *inst, unsigned time, int vol, int note, int short_mode) {
+static void gb_write_noise(chiptune_instance_t *inst, unsigned time, int vol, int note, int short_mode, int do_trigger) {
     uint8_t poly_reg;
     gb_noise_params_from_note(note, short_mode, &poly_reg);
 
-    /* $FF20: length (unused, set to max) */
-    apu_write_io(inst->gb_apu, 0xFF20, 0x3F, time);
     /* $FF21: volume | direction | pace */
-    apu_write_io(inst->gb_apu, 0xFF21, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time + 1);
+    apu_write_io(inst->gb_apu, 0xFF21, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
     /* $FF22: clock shift | width | divisor */
-    apu_write_io(inst->gb_apu, 0xFF22, poly_reg, time + 2);
-    /* $FF23: trigger */
-    apu_write_io(inst->gb_apu, 0xFF23, 0x80, time + 3);
+    apu_write_io(inst->gb_apu, 0xFF22, poly_reg, time + 1);
+    if (do_trigger) {
+        /* $FF20: length (set to max) */
+        apu_write_io(inst->gb_apu, 0xFF20, 0x3F, time + 2);
+        /* $FF23: trigger */
+        apu_write_io(inst->gb_apu, 0xFF23, 0x80, time + 3);
+    }
 }
 
 static void gb_silence_channel(chiptune_instance_t *inst, int chan_idx, unsigned time) {
@@ -941,6 +985,7 @@ static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) 
             v->note = note;
             v->velocity = data2;
             v->channel_idx = chan;
+            v->triggered = 0;  /* Will trigger on first render block */
             v->age = ++inst->voice_age_counter;
 
             /* Determine channel type */
@@ -986,6 +1031,7 @@ static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) 
                         v2->velocity = data2;
                         v2->channel_idx = chan2;
                         v2->channel_type = chan2;
+                        v2->triggered = 0;
                         v2->age = ++inst->voice_age_counter;
                         env_init(&v2->env);
                         env_configure(&v2->env, attack, decay);
@@ -1356,25 +1402,27 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
             if (apu_vol > 15) apu_vol = 15;
 
             /* Write to appropriate APU channel */
+            int do_trigger = !v->triggered;
             switch (v->channel_type) {
                 case CHAN_PULSE1:
-                    nes_write_pulse(inst, 0, nes_time, duty, apu_vol, freq);
+                    nes_write_pulse(inst, 0, nes_time, duty, apu_vol, freq, do_trigger);
                     nes_time += 4;
                     break;
                 case CHAN_PULSE2:
-                    nes_write_pulse(inst, 1, nes_time, duty, apu_vol, freq);
+                    nes_write_pulse(inst, 1, nes_time, duty, apu_vol, freq, do_trigger);
                     nes_time += 4;
                     break;
                 case CHAN_TRIANGLE:
                     /* Triangle has no volume control, just gate */
-                    nes_write_triangle(inst, nes_time, (apu_vol > 0) ? 1 : 0, freq);
+                    nes_write_triangle(inst, nes_time, (apu_vol > 0) ? 1 : 0, freq, do_trigger);
                     nes_time += 3;
                     break;
                 case CHAN_NOISE:
-                    nes_write_noise(inst, nes_time, apu_vol, v->note, noise_mode);
+                    nes_write_noise(inst, nes_time, apu_vol, v->note, noise_mode, do_trigger);
                     nes_time += 3;
                     break;
             }
+            v->triggered = 1;
         }
 
         /* Silence inactive channels */
@@ -1470,24 +1518,26 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
             if (gb_vol > 15) gb_vol = 15;
 
             /* Write to appropriate GB channel */
+            int do_trigger = !v->triggered;
             switch (v->channel_idx) {
                 case 0:
-                    gb_write_square1(inst, gb_time, duty, gb_vol, freq, sweep);
+                    gb_write_square1(inst, gb_time, duty, gb_vol, freq, sweep, do_trigger);
                     gb_time += 5;
                     break;
                 case 1:
-                    gb_write_square2(inst, gb_time, duty, gb_vol, freq);
+                    gb_write_square2(inst, gb_time, duty, gb_vol, freq, do_trigger);
                     gb_time += 4;
                     break;
                 case 2: /* wave */
-                    gb_write_wave(inst, gb_time, gb_vol, freq);
-                    gb_time += 3;
+                    gb_write_wave(inst, gb_time, gb_vol, freq, do_trigger);
+                    gb_time += 4;
                     break;
                 case 3: /* noise */
-                    gb_write_noise(inst, gb_time, gb_vol, v->note, noise_mode);
+                    gb_write_noise(inst, gb_time, gb_vol, v->note, noise_mode, do_trigger);
                     gb_time += 4;
                     break;
             }
+            v->triggered = 1;
         }
 
         /* Silence inactive channels */
@@ -1530,6 +1580,8 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
         inst->gb_frame_seq_counter = clock;
 
         apu_end_frame(inst->gb_apu, total_cycles);
+        /* Reset timestamps to match the clock reset done inside apu_end_frame */
+        apu_update_timestamp(inst->gb_apu, -(int)total_cycles);
 
         /* Read stereo samples */
         int avail = apu_samples_avaliable(inst->gb_apu);
