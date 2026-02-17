@@ -1304,17 +1304,13 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
             voice_t *v = &inst->voices[vi];
             if (!v->active) continue;
 
-            /* Process envelope - compute average level for this block */
-            float avg_level = 0.0f;
-            float tmp_level = v->env.level;
-            int tmp_stage = v->env.stage;
-            /* Just sample at the start of the block for APU volume */
-            avg_level = v->env.level;
+            /* Block-rate envelope: sample level at start of block for APU volume.
+             * This gives chiptune-authentic staircase envelope behavior (~2.9ms steps). */
+            float avg_level = v->env.level;
 
-            /* Advance envelope through the block */
+            /* Advance envelope state through the block (per-sample values unused) */
             for (int s = 0; s < frames; s++) {
-                float lev = env_process(&v->env);
-                (void)lev;
+                env_process(&v->env);
             }
 
             /* If envelope finished, mark voice inactive */
@@ -1411,7 +1407,8 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
             memset(inst->nes_mono_buf, 0, sizeof(inst->nes_mono_buf));
             inst->nes_blip.read_samples(inst->nes_mono_buf, to_read);
 
-            /* Convert mono to stereo with scaling (NES output is quiet) */
+            /* Convert mono to stereo. NES APU output peaks ~5000; 6x scales to ~30000
+             * for good headroom within int16 range. */
             for (int s = 0; s < to_read; s++) {
                 int32_t sample = (int32_t)inst->nes_mono_buf[s] * 6;
                 if (sample > 32767) sample = 32767;
@@ -1540,7 +1537,8 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
             memset(inst->gb_stereo_buf, 0, sizeof(inst->gb_stereo_buf));
             int read_count = apu_read_samples(inst->gb_apu, inst->gb_stereo_buf, stereo_shorts);
 
-            /* Copy to output with scaling */
+            /* Copy to output with scaling. GB APU output peaks ~8000; 4x scales
+             * to ~32000 for good headroom within int16 range. */
             int sample_pairs = read_count / 2;
             for (int s = 0; s < sample_pairs && s < frames; s++) {
                 int32_t left = (int32_t)inst->gb_stereo_buf[s * 2] * 4;
