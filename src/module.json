@@ -1,0 +1,21 @@
+{
+  "id": "chiptune",
+  "name": "Chiptune",
+  "abbrev": "CT",
+  "version": "0.1.0",
+  "description": "NES & Game Boy chiptune synthesizer",
+  "author": "charlesvestal",
+  "license": "MIT/LGPL-2.1",
+  "dsp": "dsp.so",
+  "api_version": 2,
+  "standalone": false,
+  "capabilities": {
+    "audio_out": true,
+    "audio_in": false,
+    "midi_in": true,
+    "midi_out": false,
+    "aftertouch": false,
+    "chainable": true,
+    "component_type": "sound_generator"
+  }
+}

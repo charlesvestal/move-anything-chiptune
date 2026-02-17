@@ -1,0 +1,28 @@
+{
+    "name": "Chiptune NES",
+    "version": 1,
+    "chain": {
+        "synth": {
+            "module": "chiptune",
+            "config": {
+                "state": {
+                    "preset": 0,
+                    "chip": 0,
+                    "alloc_mode": 0,
+                    "duty": 2,
+                    "env_attack": 0,
+                    "env_decay": 8,
+                    "sweep": 0,
+                    "vibrato_depth": 0,
+                    "vibrato_rate": 0,
+                    "noise_mode": 0,
+                    "wavetable": 0,
+                    "volume": 12,
+                    "octave_transpose": 0
+                }
+            }
+        },
+        "audio_fx": [],
+        "input": "both"
+    }
+}

@@ -1,0 +1,6 @@
+[submodule "src/libs/nes_snd_emu"]
+	path = src/libs/nes_snd_emu
+	url = https://github.com/jamesathey/Nes_Snd_Emu.git
+[submodule "src/libs/gb_apu"]
+	path = src/libs/gb_apu
+	url = https://github.com/ITotalJustice/gb_apu.git
