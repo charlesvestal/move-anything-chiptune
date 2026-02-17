@@ -13,6 +13,7 @@
 #include <string.h>
 #include <math.h>
 #include <stdint.h>
+#include <new>
 
 /* Plugin API definitions */
 extern "C" {
@@ -845,7 +846,9 @@ static void gb_silence_channel(chiptune_instance_t *inst, int chan_idx, unsigned
 static void* v2_create_instance(const char *module_dir, const char *json_defaults) {
     (void)json_defaults;
 
-    chiptune_instance_t *inst = (chiptune_instance_t*)calloc(1, sizeof(chiptune_instance_t));
+    /* Must use new (not calloc) because Nes_Apu and Blip_Buffer are C++ objects
+     * with constructors that must run. calloc skips constructors → SIGSEGV. */
+    chiptune_instance_t *inst = new (std::nothrow) chiptune_instance_t();
     if (!inst) return NULL;
 
     strncpy(inst->module_dir, module_dir, sizeof(inst->module_dir) - 1);
@@ -880,7 +883,7 @@ static void v2_destroy_instance(void *instance) {
         apu_quit(inst->gb_apu);
         inst->gb_apu = NULL;
     }
-    free(inst);
+    delete inst;
     plugin_log("Instance destroyed");
 }
 
