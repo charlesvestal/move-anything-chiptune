@@ -58,9 +58,9 @@ typedef plugin_api_v2_t* (*move_plugin_init_v2_fn)(const host_api_v1_t *host);
 #include "nes_apu/Nes_Apu.h"
 #include "nes_apu/Blip_Buffer.h"
 
-/* GB APU */
+/* GB APU (blargg's Gb_Snd_Emu via C wrapper) */
 extern "C" {
-#include "gb_apu.h"
+#include "gb_apu_wrapper.h"
 }
 
 /* Parameter helper */
@@ -75,16 +75,13 @@ extern "C" {
 #define SAMPLE_RATE     44100
 #define FRAMES_PER_BLOCK 128
 #define MAX_VOICES      5
-#define NUM_PRESETS      22
+#define NUM_PRESETS      32
 #define NUM_WAVETABLES   8
 
 /* NES cycles per audio block: 128 * 1789773 / 44100 */
 #define NES_CYCLES_PER_BLOCK ((FRAMES_PER_BLOCK * NES_CPU_CLOCK + SAMPLE_RATE / 2) / SAMPLE_RATE)
 /* GB cycles per audio block: 128 * 4194304 / 44100 */
 #define GB_CYCLES_PER_BLOCK  ((FRAMES_PER_BLOCK * GB_CPU_CLOCK + SAMPLE_RATE / 2) / SAMPLE_RATE)
-
-/* GB frame sequencer period: 4194304 / 512 = 8192 cycles */
-#define GB_FRAME_SEQ_PERIOD 8192
 
 /* Chip types */
 #define CHIP_NES 0
@@ -103,11 +100,12 @@ extern "C" {
 #define CHAN_NOISE    3
 #define CHAN_DMC      4  /* NES only, not used for voices */
 
-/* Envelope stages */
+/* Envelope stages (ADSR) */
 #define ENV_IDLE    0
 #define ENV_ATTACK  1
 #define ENV_DECAY   2
-#define ENV_RELEASE 3
+#define ENV_SUSTAIN 3
+#define ENV_RELEASE 4
 
 /* =====================================================================
  * Host API reference
@@ -131,6 +129,8 @@ enum ChiptuneParam {
     P_DUTY = 0,
     P_ENV_ATTACK,
     P_ENV_DECAY,
+    P_ENV_SUSTAIN,
+    P_ENV_RELEASE,
     P_SWEEP,
     P_VIBRATO_DEPTH,
     P_VIBRATO_RATE,
@@ -141,6 +141,8 @@ enum ChiptuneParam {
     P_VOLUME,
     P_OCTAVE_TRANSPOSE,
     P_ALLOC_MODE,
+    P_PITCH_ENV_DEPTH,
+    P_PITCH_ENV_SPEED,
     P_COUNT
 };
 
@@ -148,6 +150,8 @@ static const param_def_t g_param_defs[] = {
     {"duty",             "Duty Cycle",    PARAM_TYPE_INT,   P_DUTY,             0.0f, 3.0f},
     {"env_attack",       "Attack",        PARAM_TYPE_INT,   P_ENV_ATTACK,       0.0f, 15.0f},
     {"env_decay",        "Decay",         PARAM_TYPE_INT,   P_ENV_DECAY,        0.0f, 15.0f},
+    {"env_sustain",      "Sustain",       PARAM_TYPE_INT,   P_ENV_SUSTAIN,      0.0f, 15.0f},
+    {"env_release",      "Release",       PARAM_TYPE_INT,   P_ENV_RELEASE,      0.0f, 15.0f},
     {"sweep",            "Sweep",         PARAM_TYPE_INT,   P_SWEEP,            0.0f, 7.0f},
     {"vibrato_depth",    "Vibrato Depth", PARAM_TYPE_INT,   P_VIBRATO_DEPTH,    0.0f, 12.0f},
     {"vibrato_rate",     "Vibrato Rate",  PARAM_TYPE_INT,   P_VIBRATO_RATE,     0.0f, 10.0f},
@@ -158,6 +162,8 @@ static const param_def_t g_param_defs[] = {
     {"volume",           "Volume",        PARAM_TYPE_INT,   P_VOLUME,           0.0f, 15.0f},
     {"octave_transpose", "Octave",        PARAM_TYPE_INT,   P_OCTAVE_TRANSPOSE, -3.0f, 3.0f},
     {"alloc_mode",       "Voice Mode",    PARAM_TYPE_INT,   P_ALLOC_MODE,       0.0f, 2.0f},
+    {"pitch_env_depth",  "PEnv Depth",    PARAM_TYPE_INT,   P_PITCH_ENV_DEPTH,  0.0f, 24.0f},
+    {"pitch_env_speed",  "PEnv Speed",    PARAM_TYPE_INT,   P_PITCH_ENV_SPEED,  0.0f, 15.0f},
 };
 
 /* =====================================================================
@@ -194,6 +200,8 @@ struct chiptune_preset_t {
     uint8_t duty;
     uint8_t env_attack;
     uint8_t env_decay;
+    uint8_t env_sustain;       /* Sustain level 0-15 (0=off/AD only, 15=full) */
+    uint8_t env_release;       /* Release time 0-15 (0=instant, 15=long) */
     uint8_t sweep;
     uint8_t vibrato_depth;
     uint8_t vibrato_rate;
@@ -202,66 +210,92 @@ struct chiptune_preset_t {
     uint8_t channel_mask;
     uint8_t detune;
     uint8_t volume;
+    uint8_t pitch_env_depth;   /* Semitones above base note at attack (0-24) */
+    uint8_t pitch_env_speed;   /* How fast pitch drops back (0=off, 1=fast..15=slow) */
 };
 
 /*
  * Presets inspired by classic NES/GB game sounds.
- * Fields: name, chip, alloc_mode, duty, env_attack, env_decay, sweep,
- *         vibrato_depth, vibrato_rate, noise_mode, wavetable_idx,
- *         channel_mask, detune, volume
+ * Fields: name, chip, alloc_mode, duty, env_attack, env_decay, env_sustain, env_release,
+ *         sweep, vibrato_depth, vibrato_rate, noise_mode, wavetable_idx,
+ *         channel_mask, detune, volume, pitch_env_depth, pitch_env_speed
  *
- * Duty: 0=12.5% (thin), 1=25% (bright), 2=50% (round), 3=75% (same as 25%)
- * Envelope: attack 0=instant, decay 0=instant..15=~1s
+ * Duty: 0=12.5% (thin/nasal), 1=25% (bright), 2=50% (warm/round), 3=75% (=25%)
+ * ADSR: A 0=instant..15=~250ms; D 0=instant..15=~1s; S 0=off(AD)..15=full; R 0=instant..15=long
  * Channel mask: bit0=pulse1/sq1, bit1=pulse2/sq2, bit2=tri/wave, bit3=noise
+ *   0x01=mono sq1, 0x03=2-note poly, 0x07=3-note poly, 0x0F=4-note poly
+ * Detune >0 with mask 0x03: auto-doubles note to both pulse channels for unison
+ * Pitch env: depth=semitones above note at attack, speed=decay rate (1=fast, 15=slow)
  */
 static const chiptune_preset_t g_factory_presets[NUM_PRESETS] = {
-    /* ---- NES presets ---- */
-    /* Mega Man style: 50% duty, quick decay for punchy melodic lines */
-    /*  0 */ {"NES Square Lead",   CHIP_NES, ALLOC_LEAD,   2, 0, 10, 0, 0, 0, 0, 0, 0x01,  0, 13},
-    /* Castlevania style: 25% duty, brighter and more cutting */
-    /*  1 */ {"NES Bright Lead",   CHIP_NES, ALLOC_LEAD,   1, 0, 10, 0, 0, 0, 0, 0, 0x01,  0, 12},
-    /* DuckTales style: 12.5% duty, thin and nasal */
-    /*  2 */ {"NES Thin Lead",     CHIP_NES, ALLOC_LEAD,   0, 0,  8, 0, 0, 0, 0, 0, 0x01,  0, 11},
-    /* Two detuned pulse channels for thick unison (Mega Man boss music) */
-    /*  3 */ {"NES Duo Lead",      CHIP_NES, ALLOC_AUTO,   2, 0, 10, 0, 0, 0, 0, 0, 0x03,  8, 12},
-    /* Mario/Mega Man bass: triangle with long decay */
-    /*  4 */ {"NES Triangle Bass", CHIP_NES, ALLOC_LEAD,   2, 0, 12, 0, 0, 0, 0, 0, 0x04,  0, 15},
-    /* Deep sub bass: triangle, very long sustain */
-    /*  5 */ {"NES Tri Sub",       CHIP_NES, ALLOC_LEAD,   2, 0, 15, 0, 0, 0, 0, 0, 0x04,  0, 15},
-    /* Final Fantasy style melody with gentle vibrato */
-    /*  6 */ {"NES Vibrato Lead",  CHIP_NES, ALLOC_LEAD,   2, 0, 12, 0, 3, 5, 0, 0, 0x01,  0, 12},
-    /* Closed hi-hat: short metallic noise (short mode) */
-    /*  7 */ {"NES Noise Hat",     CHIP_NES, ALLOC_LEAD,   0, 0,  1, 0, 0, 0, 1, 0, 0x08,  0, 12},
-    /* Snare: longer white noise burst */
-    /*  8 */ {"NES Noise Snare",   CHIP_NES, ALLOC_LEAD,   0, 0,  3, 0, 0, 0, 0, 0, 0x08,  0, 13},
-    /* Power fifth: two pulse channels a fifth apart */
-    /*  9 */ {"NES Power Chord",   CHIP_NES, ALLOC_AUTO,   2, 0, 10, 0, 0, 0, 0, 0, 0x03,  0, 12},
-    /* Full paraphonic: all 4 channels for chords + bass + drums */
-    /* 10 */ {"NES Full Kit",      CHIP_NES, ALLOC_LOCKED, 2, 0,  8, 0, 0, 0, 0, 0, 0x0F,  0, 12},
+    /*                                      du at dc su re sw vD vR nM wT mask det vol pD pS */
+    /* ==== NES presets (0-15) ==== */
+    /* Warm 50% lead, full sustain */
+    /*  0 */ {"NES Lead",          CHIP_NES, ALLOC_LEAD,   2, 0,  3,15, 4, 0, 0, 0, 0, 0, 0x01,  0, 15, 0, 0},
+    /* Bright 25% lead */
+    /*  1 */ {"NES Bright",        CHIP_NES, ALLOC_LEAD,   1, 0,  3,15, 4, 0, 0, 0, 0, 0, 0x01,  0, 14, 0, 0},
+    /* Thin nasal 12.5% lead */
+    /*  2 */ {"NES Thin",          CHIP_NES, ALLOC_LEAD,   0, 0,  3,15, 4, 0, 0, 0, 0, 0, 0x01,  0, 14, 0, 0},
+    /* Slow swell pad with vibrato */
+    /*  3 */ {"NES Pad",           CHIP_NES, ALLOC_LEAD,   2, 6,  5,12, 8, 0, 3, 5, 0, 0, 0x01,  0, 12, 0, 0},
+    /* Short pluck, no sustain */
+    /*  4 */ {"NES Pluck",         CHIP_NES, ALLOC_LEAD,   1, 0,  3, 0, 0, 0, 0, 0, 0, 0, 0x01,  0, 15, 0, 0},
+    /* Very short stab */
+    /*  5 */ {"NES Stab",          CHIP_NES, ALLOC_LEAD,   0, 0,  1, 0, 0, 0, 0, 0, 0, 0, 0x01,  0, 15, 0, 0},
+    /* 3-note poly: warm 50%, both pulses + triangle */
+    /*  6 */ {"NES Poly",          CHIP_NES, ALLOC_AUTO,   2, 0,  3,15, 5, 0, 0, 0, 0, 0, 0x07,  0, 13, 0, 0},
+    /* 3-note bright poly: 25% duty, snappier */
+    /*  7 */ {"NES Poly Bright",   CHIP_NES, ALLOC_AUTO,   1, 0,  2,12, 3, 0, 0, 0, 0, 0, 0x07,  0, 14, 0, 0},
+    /* Thick detuned unison */
+    /*  8 */ {"NES Unison",        CHIP_NES, ALLOC_AUTO,   2, 0,  3,15, 4, 0, 0, 0, 0, 0, 0x03,  8, 13, 0, 0},
+    /* Slow brass: attack swell, rich, full sustain */
+    /*  9 */ {"NES Brass",         CHIP_NES, ALLOC_LEAD,   2, 4,  2,15, 6, 0, 0, 0, 0, 0, 0x01,  0, 14, 0, 0},
+    /* Triangle bass with punch */
+    /* 10 */ {"Tri Bass",          CHIP_NES, ALLOC_LEAD,   2, 0,  6,10, 3, 0, 0, 0, 0, 0, 0x04,  0, 15, 0, 0},
+    /* Kick: triangle with pitch drop */
+    /* 11 */ {"Tri Kick",          CHIP_NES, ALLOC_LEAD,   2, 0,  2, 0, 0, 0, 0, 0, 0, 0, 0x04,  0, 15, 24, 1},
+    /* Bell: thin duty, medium decay, slight sustain */
+    /* 12 */ {"NES Bell",          CHIP_NES, ALLOC_LEAD,   0, 0,  8, 4, 5, 0, 0, 0, 0, 0, 0x01,  0, 13, 0, 0},
+    /* Closed hi-hat: short noise */
+    /* 13 */ {"NES Hat",           CHIP_NES, ALLOC_LEAD,   0, 0,  1, 0, 0, 0, 0, 0, 1, 0, 0x08,  0, 15, 0, 0},
+    /* Snare: white noise */
+    /* 14 */ {"NES Snare",         CHIP_NES, ALLOC_LEAD,   0, 0,  5, 0, 0, 0, 0, 0, 0, 0, 0x08,  0, 15, 0, 0},
+    /* Zap: noise with pitch drop */
+    /* 15 */ {"NES Zap",           CHIP_NES, ALLOC_LEAD,   0, 0,  3, 0, 0, 0, 0, 0, 1, 0, 0x08,  0, 15, 12, 2},
 
-    /* ---- GB presets ---- */
-    /* Pokemon battle style: 50% duty, clean square lead */
-    /* 11 */ {"GB Square Lead",    CHIP_GB,  ALLOC_LEAD,   2, 0, 10, 0, 0, 0, 0, 0, 0x01,  0, 13},
-    /* Zelda style: sweep down on note attack */
-    /* 12 */ {"GB Sweep Lead",     CHIP_GB,  ALLOC_LEAD,   2, 0, 10, 3, 0, 0, 0, 0, 0x01,  0, 12},
-    /* Two detuned squares for thick chorus effect */
-    /* 13 */ {"GB Pulse Duo",      CHIP_GB,  ALLOC_AUTO,   2, 0, 10, 0, 0, 0, 0, 0, 0x03,  8, 12},
-    /* Zelda bass: sawtooth wave channel, long decay */
-    /* 14 */ {"GB Wave Bass",      CHIP_GB,  ALLOC_LEAD,   2, 0, 12, 0, 0, 0, 0, 0, 0x04,  0, 15},
-    /* Soft pad: triangle wave with slow attack and vibrato */
-    /* 15 */ {"GB Wave Pad",       CHIP_GB,  ALLOC_LEAD,   2, 5, 13, 0, 2, 4, 0, 2, 0x04,  0, 15},
-    /* Kirby bass: square wave with growl */
-    /* 16 */ {"GB Wave Growl",     CHIP_GB,  ALLOC_LEAD,   2, 0,  6, 0, 0, 0, 0, 6, 0x04,  0, 15},
-    /* Closed hi-hat: short metallic noise */
-    /* 17 */ {"GB Noise Hat",      CHIP_GB,  ALLOC_LEAD,   0, 0,  1, 0, 0, 0, 1, 0, 0x08,  0, 13},
-    /* Snare drum: longer noise burst */
-    /* 18 */ {"GB Noise Snare",    CHIP_GB,  ALLOC_LEAD,   0, 0,  3, 0, 0, 0, 0, 0, 0x08,  0, 13},
-    /* Full 4-channel kit for chords */
-    /* 19 */ {"GB Full Kit",       CHIP_GB,  ALLOC_LOCKED, 2, 0,  8, 0, 0, 0, 0, 0, 0x0F,  0, 12},
-    /* Classic chiptune: all channels, slight vibrato */
-    /* 20 */ {"GB Chiptune",       CHIP_GB,  ALLOC_LOCKED, 2, 0,  8, 0, 2, 4, 0, 0, 0x0F,  0, 12},
-    /* Vibrato melody lead (Final Fantasy style) */
-    /* 21 */ {"GB Vibrato Lead",   CHIP_GB,  ALLOC_LEAD,   2, 0, 12, 0, 3, 5, 0, 0, 0x01,  0, 13},
+    /* ==== GB presets (16-31) ==== */
+    /* Classic GB warm lead */
+    /* 16 */ {"GB Lead",           CHIP_GB,  ALLOC_LEAD,   2, 0,  3,15, 4, 0, 0, 0, 0, 0, 0x01,  0, 14, 0, 0},
+    /* Bright 25% lead */
+    /* 17 */ {"GB Bright",         CHIP_GB,  ALLOC_LEAD,   1, 0,  3,15, 4, 0, 0, 0, 0, 0, 0x01,  0, 14, 0, 0},
+    /* Thin nasal 12.5% */
+    /* 18 */ {"GB Thin",           CHIP_GB,  ALLOC_LEAD,   0, 0,  3,15, 4, 0, 0, 0, 0, 0, 0x01,  0, 14, 0, 0},
+    /* 3-note poly: warm 50%, squares + wave */
+    /* 19 */ {"GB Poly",           CHIP_GB,  ALLOC_AUTO,   2, 0,  3,15, 5, 0, 0, 0, 0, 0, 0x07,  0, 13, 0, 0},
+    /* 3-note bright poly: 25%, snappier envelope */
+    /* 20 */ {"GB Poly Bright",    CHIP_GB,  ALLOC_AUTO,   1, 0,  2,12, 3, 0, 0, 0, 0, 0, 0x07,  0, 14, 0, 0},
+    /* Detuned unison on both squares */
+    /* 21 */ {"GB Unison",         CHIP_GB,  ALLOC_AUTO,   2, 0,  3,15, 4, 0, 0, 0, 0, 0, 0x03,  8, 13, 0, 0},
+    /* Vibrato melody */
+    /* 22 */ {"GB Vibrato",        CHIP_GB,  ALLOC_LEAD,   2, 0,  3,15, 5, 0, 4, 6, 0, 0, 0x01,  0, 13, 0, 0},
+    /* Short pluck, no sustain */
+    /* 23 */ {"GB Pluck",          CHIP_GB,  ALLOC_LEAD,   0, 0,  3, 0, 0, 0, 0, 0, 0, 0, 0x01,  0, 15, 0, 0},
+    /* Slow pad with vibrato */
+    /* 24 */ {"GB Pad",            CHIP_GB,  ALLOC_LEAD,   2, 6,  5,12, 8, 0, 3, 5, 0, 0, 0x01,  0, 12, 0, 0},
+    /* Wave bass: sawtooth */
+    /* 25 */ {"Wave Bass",         CHIP_GB,  ALLOC_LEAD,   2, 0,  4,12, 3, 0, 0, 0, 0, 0, 0x04,  0, 15, 0, 0},
+    /* Wave pad: sine, slow attack, vibrato */
+    /* 26 */ {"Wave Pad",          CHIP_GB,  ALLOC_LEAD,   2, 6,  5,12, 8, 0, 2, 4, 0, 3, 0x04,  0, 15, 0, 0},
+    /* Wave sub: triangle, long sustain */
+    /* 27 */ {"Wave Sub",          CHIP_GB,  ALLOC_LEAD,   2, 0,  0,15, 6, 0, 0, 0, 0, 2, 0x04,  0, 15, 0, 0},
+    /* Growl: aggressive bass */
+    /* 28 */ {"Wave Growl",        CHIP_GB,  ALLOC_LEAD,   2, 0,  6, 0, 0, 0, 0, 0, 0, 6, 0x04,  0, 15, 0, 0},
+    /* Metallic wave texture */
+    /* 29 */ {"Wave Metal",        CHIP_GB,  ALLOC_LEAD,   2, 0,  8, 0, 0, 0, 0, 0, 0, 7, 0x04,  0, 15, 0, 0},
+    /* GB brass: slow attack, full sustain */
+    /* 30 */ {"GB Brass",          CHIP_GB,  ALLOC_LEAD,   2, 4,  2,15, 6, 0, 0, 0, 0, 0, 0x01,  0, 14, 0, 0},
+    /* GB bell: thin duty, ringing decay */
+    /* 31 */ {"GB Bell",           CHIP_GB,  ALLOC_LEAD,   0, 0,  8, 4, 5, 0, 0, 0, 0, 0, 0x01,  0, 13, 0, 0},
 };
 
 /* =====================================================================
@@ -270,9 +304,11 @@ static const chiptune_preset_t g_factory_presets[NUM_PRESETS] = {
 
 struct voice_envelope_t {
     float level;
-    int stage;       /* ENV_IDLE, ENV_ATTACK, ENV_DECAY, ENV_RELEASE */
-    float attack_inc;  /* per-sample increment during attack */
-    float decay_dec;   /* per-sample decrement during decay */
+    int stage;          /* ENV_IDLE, ENV_ATTACK, ENV_DECAY, ENV_SUSTAIN, ENV_RELEASE */
+    float attack_inc;   /* per-sample increment during attack */
+    float decay_dec;    /* per-sample decrement during decay */
+    float sustain_level; /* sustain level 0.0-1.0 */
+    float release_dec;  /* per-sample decrement during release */
 };
 
 struct voice_t {
@@ -284,6 +320,7 @@ struct voice_t {
     int age;
     int triggered;     /* 1 = already triggered this note, skip re-trigger */
     voice_envelope_t env;
+    float pitch_env;   /* Current pitch offset in semitones (decays toward 0) */
 };
 
 /* =====================================================================
@@ -300,8 +337,8 @@ typedef struct {
     Nes_Apu nes_apu;
     Blip_Buffer nes_blip;
 
-    /* GB APU */
-    GbApu *gb_apu;
+    /* GB APU (blargg) */
+    gb_apu_wrapper_t *gb_apu;
 
     /* Voice allocator */
     voice_t voices[MAX_VOICES];
@@ -321,9 +358,6 @@ typedef struct {
     /* Temp buffers */
     int16_t nes_mono_buf[FRAMES_PER_BLOCK + 64];
     int16_t gb_stereo_buf[(FRAMES_PER_BLOCK + 64) * 2];
-
-    /* GB frame sequencer tracking */
-    unsigned gb_frame_seq_counter;
 } chiptune_instance_t;
 
 /* =====================================================================
@@ -352,10 +386,12 @@ static int nes_triangle_period(float freq) {
     return period;
 }
 
-/* NES noise period lookup: MIDI note to noise period index (0=highest pitch, 15=lowest) */
+/* NES noise period lookup: MIDI note to noise period index (0=highest pitch, 15=lowest)
+ * Move pads send notes 68-99 (32 notes). Spread 16 periods across this range
+ * so every 2 adjacent pads get a different pitch. */
 static int nes_noise_period_from_note(int note) {
-    /* Map MIDI notes roughly to noise periods. Higher note = lower period index = higher pitch */
-    int idx = 15 - (note / 8);
+    /* Map pad range 68-99 to period indices 15 (low) down to 0 (high) */
+    int idx = 15 - ((note - 68) / 2);
     if (idx < 0) idx = 0;
     if (idx > 15) idx = 15;
     return idx;
@@ -379,16 +415,37 @@ static int gb_wave_freq_reg(float freq) {
     return reg;
 }
 
-/* GB noise frequency from MIDI note */
+/* GB noise frequency from MIDI note
+ * Move pads send notes 68-99. We use a lookup table that maps each pair of
+ * adjacent notes to a unique (shift, divisor) combination for maximum variety.
+ * GB noise freq = 524288 / (divisor * 2^(shift+1)) Hz, where divisor=8*(code) for code>0.
+ * With 14 shifts * 8 divisors = 112 unique frequencies, we pick 16 well-spaced ones. */
 static void gb_noise_params_from_note(int note, int short_mode, uint8_t *out_reg) {
-    /* Map MIDI note to clock shift and divisor.
-     * Higher note = lower shift = higher frequency noise.
-     * $FF22 format: bits 7-4 = clock shift, bit 3 = width mode, bits 2-0 = divisor */
-    int shift = 13 - (note / 10);
-    if (shift < 0) shift = 0;
-    if (shift > 13) shift = 13;
-    int divisor = 1;  /* divisor code 1 */
-    *out_reg = (uint8_t)((shift << 4) | (short_mode ? 0x08 : 0x00) | (divisor & 0x07));
+    /* 16 entries: shift (4 bits) and divisor code (3 bits), from low pitch to high */
+    static const uint8_t noise_table[16][2] = {
+        {13, 1}, /* 0  - very low rumble */
+        {12, 1}, /* 1 */
+        {11, 1}, /* 2 */
+        {10, 1}, /* 3 */
+        { 9, 1}, /* 4 */
+        { 8, 1}, /* 5 */
+        { 7, 1}, /* 6 */
+        { 6, 1}, /* 7 - mid */
+        { 5, 1}, /* 8 */
+        { 4, 1}, /* 9 */
+        { 3, 1}, /* 10 */
+        { 3, 0}, /* 11 - divisor 0 = special (freq/2) */
+        { 2, 1}, /* 12 */
+        { 2, 0}, /* 13 */
+        { 1, 1}, /* 14 */
+        { 0, 1}, /* 15 - highest pitch hiss */
+    };
+    int idx = (note - 68) / 2;
+    if (idx < 0) idx = 0;
+    if (idx > 15) idx = 15;
+    uint8_t shift = noise_table[idx][0];
+    uint8_t div_code = noise_table[idx][1];
+    *out_reg = (uint8_t)((shift << 4) | (short_mode ? 0x08 : 0x00) | (div_code & 0x07));
 }
 
 /* JSON helpers (minimal, same pattern as braids) */
@@ -429,11 +486,13 @@ static void env_init(voice_envelope_t *env) {
     env->stage = ENV_IDLE;
     env->attack_inc = 0.0f;
     env->decay_dec = 0.0f;
+    env->sustain_level = 0.0f;
+    env->release_dec = 0.0f;
 }
 
-static void env_configure(voice_envelope_t *env, int attack_param, int decay_param) {
+static void env_configure(voice_envelope_t *env, int attack_param, int decay_param,
+                           int sustain_param, int release_param) {
     /* Attack: param 0 = instant, 1-15 = progressively slower
-     * Time in samples: attack_param * (SAMPLE_RATE / 60) roughly
      * At param=0, instant attack (1 sample). At param=15, ~0.25 seconds. */
     if (attack_param <= 0) {
         env->attack_inc = 1.0f; /* instant */
@@ -449,6 +508,18 @@ static void env_configure(voice_envelope_t *env, int attack_param, int decay_par
     } else {
         float decay_samples = decay_param * (SAMPLE_RATE / 15.0f);
         env->decay_dec = 1.0f / decay_samples;
+    }
+
+    /* Sustain: 0 = no sustain (AD envelope), 15 = full level */
+    env->sustain_level = (float)sustain_param / 15.0f;
+
+    /* Release: param 0 = instant, 1-15 = progressively slower
+     * At param=0, instant. At param=15, ~1 second. */
+    if (release_param <= 0) {
+        env->release_dec = 1.0f; /* instant */
+    } else {
+        float release_samples = release_param * (SAMPLE_RATE / 15.0f);
+        env->release_dec = 1.0f / release_samples;
     }
 }
 
@@ -475,15 +546,24 @@ static float env_process(voice_envelope_t *env) {
             break;
         case ENV_DECAY:
             env->level -= env->decay_dec;
+            if (env->level <= env->sustain_level) {
+                env->level = env->sustain_level;
+                if (env->sustain_level > 0.0f) {
+                    env->stage = ENV_SUSTAIN;
+                } else {
+                    env->stage = ENV_IDLE; /* AD mode: no sustain */
+                }
+            }
+            break;
+        case ENV_SUSTAIN:
+            /* Hold at sustain level until gate off */
+            break;
+        case ENV_RELEASE:
+            env->level -= env->release_dec;
             if (env->level <= 0.0f) {
                 env->level = 0.0f;
                 env->stage = ENV_IDLE;
             }
-            break;
-        case ENV_RELEASE:
-            /* Immediate release for chiptune style */
-            env->level = 0.0f;
-            env->stage = ENV_IDLE;
             break;
         case ENV_IDLE:
         default:
@@ -509,18 +589,10 @@ static void init_nes_apu(chiptune_instance_t *inst) {
 
 static void init_gb_apu(chiptune_instance_t *inst) {
     if (inst->gb_apu) {
-        apu_quit(inst->gb_apu);
+        gb_apu_wrapper_destroy(inst->gb_apu);
     }
-    inst->gb_apu = apu_init(GB_CPU_CLOCK, SAMPLE_RATE);
-    apu_reset(inst->gb_apu, GbApuType_DMG);
-    inst->gb_frame_seq_counter = 0;
-
-    /* Master enable */
-    apu_write_io(inst->gb_apu, 0xFF26, 0x80, 0);
-    /* Master volume max */
-    apu_write_io(inst->gb_apu, 0xFF24, 0x77, 0);
-    /* All channels to both speakers */
-    apu_write_io(inst->gb_apu, 0xFF25, 0xFF, 0);
+    inst->gb_apu = gb_apu_wrapper_create(SAMPLE_RATE);
+    /* Master enable, volume, and routing are set by the wrapper */
 }
 
 /* =====================================================================
@@ -536,6 +608,8 @@ static void apply_preset(chiptune_instance_t *inst, int idx) {
     inst->params[P_DUTY] = (float)p->duty;
     inst->params[P_ENV_ATTACK] = (float)p->env_attack;
     inst->params[P_ENV_DECAY] = (float)p->env_decay;
+    inst->params[P_ENV_SUSTAIN] = (float)p->env_sustain;
+    inst->params[P_ENV_RELEASE] = (float)p->env_release;
     inst->params[P_SWEEP] = (float)p->sweep;
     inst->params[P_VIBRATO_DEPTH] = (float)p->vibrato_depth;
     inst->params[P_VIBRATO_RATE] = (float)p->vibrato_rate;
@@ -546,6 +620,8 @@ static void apply_preset(chiptune_instance_t *inst, int idx) {
     inst->params[P_VOLUME] = (float)p->volume;
     inst->params[P_OCTAVE_TRANSPOSE] = 0.0f;
     inst->params[P_ALLOC_MODE] = (float)p->alloc_mode;
+    inst->params[P_PITCH_ENV_DEPTH] = (float)p->pitch_env_depth;
+    inst->params[P_PITCH_ENV_SPEED] = (float)p->pitch_env_speed;
 
     inst->current_preset = idx;
     snprintf(inst->preset_name, sizeof(inst->preset_name), "%s", p->name);
@@ -771,55 +847,53 @@ static void nes_silence_channel(chiptune_instance_t *inst, int chan_idx, int tim
 static void gb_load_wavetable(chiptune_instance_t *inst, int wave_idx, unsigned time) {
     if (wave_idx < 0 || wave_idx >= NUM_WAVETABLES) wave_idx = 0;
 
-    /* Disable wave channel before writing wave RAM */
-    apu_write_io(inst->gb_apu, 0xFF1A, 0x00, time);
+    /* Disable wave channel before writing wave RAM.
+     * Use the same time value for all writes — blargg's emulator processes
+     * them in call order regardless, and incrementing time would advance
+     * last_time, causing asserts if render_block starts at time 0. */
+    gb_apu_wrapper_write(inst->gb_apu, 0xFF1A, 0x00, time);
     /* Write 16 bytes of wave RAM ($FF30-$FF3F) */
     for (int i = 0; i < 16; i++) {
-        apu_write_io(inst->gb_apu, 0xFF30 + i, g_wavetables[wave_idx][i], time + 1 + i);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF30 + i, g_wavetables[wave_idx][i], time);
     }
     /* Re-enable wave channel */
-    apu_write_io(inst->gb_apu, 0xFF1A, 0x80, time + 17);
+    gb_apu_wrapper_write(inst->gb_apu, 0xFF1A, 0x80, time);
 }
 
 static void gb_write_square1(chiptune_instance_t *inst, unsigned time,
                              int duty, int vol, float freq, int sweep, int do_trigger) {
     int freq_reg = gb_square_freq_reg(freq);
-    /* $FF12: volume | direction(1=increase) | pace
-     * Volume in top 4 bits, pace=0 means hold (we use software envelope) */
-    apu_write_io(inst->gb_apu, 0xFF12, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
-    /* $FF13: freq low (safe to update every block) */
-    apu_write_io(inst->gb_apu, 0xFF13, (uint8_t)(freq_reg & 0xFF), time + 1);
     if (do_trigger) {
-        /* Only write sweep, duty, and trigger on note-on */
+        /* Full register setup + trigger on note-on */
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF12, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF13, (uint8_t)(freq_reg & 0xFF), time + 1);
         uint8_t sweep_reg = 0x00;
         if (sweep > 0) {
             sweep_reg = (uint8_t)(((sweep & 0x07) << 4) | 0x02);
         }
-        apu_write_io(inst->gb_apu, 0xFF10, sweep_reg, time + 2);
-        apu_write_io(inst->gb_apu, 0xFF11, (uint8_t)(((duty & 0x03) << 6) | 0x3F), time + 3);
-        /* $FF14: trigger | freq high */
-        apu_write_io(inst->gb_apu, 0xFF14, (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07)), time + 4);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF10, sweep_reg, time + 2);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF11, (uint8_t)(((duty & 0x03) << 6) | 0x3F), time + 3);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF14, (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07)), time + 4);
     } else {
-        /* Just update freq high without trigger */
-        apu_write_io(inst->gb_apu, 0xFF14, (uint8_t)((freq_reg >> 8) & 0x07), time + 2);
+        /* Just update frequency (for vibrato/pitch bend) — no trigger */
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF13, (uint8_t)(freq_reg & 0xFF), time);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF14, (uint8_t)((freq_reg >> 8) & 0x07), time + 1);
     }
 }
 
 static void gb_write_square2(chiptune_instance_t *inst, unsigned time,
                              int duty, int vol, float freq, int do_trigger) {
     int freq_reg = gb_square_freq_reg(freq);
-    /* $FF17: volume | direction | pace */
-    apu_write_io(inst->gb_apu, 0xFF17, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
-    /* $FF18: freq low (safe every block) */
-    apu_write_io(inst->gb_apu, 0xFF18, (uint8_t)(freq_reg & 0xFF), time + 1);
     if (do_trigger) {
-        /* $FF16: duty | length */
-        apu_write_io(inst->gb_apu, 0xFF16, (uint8_t)(((duty & 0x03) << 6) | 0x3F), time + 2);
-        /* $FF19: trigger | freq high */
-        apu_write_io(inst->gb_apu, 0xFF19, (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07)), time + 3);
+        /* Full register setup + trigger on note-on */
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF17, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF18, (uint8_t)(freq_reg & 0xFF), time + 1);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF16, (uint8_t)(((duty & 0x03) << 6) | 0x3F), time + 2);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF19, (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07)), time + 3);
     } else {
-        /* Just update freq high without trigger */
-        apu_write_io(inst->gb_apu, 0xFF19, (uint8_t)((freq_reg >> 8) & 0x07), time + 2);
+        /* Just update frequency — no trigger */
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF18, (uint8_t)(freq_reg & 0xFF), time);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF19, (uint8_t)((freq_reg >> 8) & 0x07), time + 1);
     }
 }
 
@@ -833,17 +907,17 @@ static void gb_write_wave(chiptune_instance_t *inst, unsigned time, int vol, flo
     else wave_vol = 0;                 /* mute */
 
     /* $FF1C: volume select (safe every block) */
-    apu_write_io(inst->gb_apu, 0xFF1C, (uint8_t)((wave_vol & 0x03) << 5), time);
+    gb_apu_wrapper_write(inst->gb_apu, 0xFF1C, (uint8_t)((wave_vol & 0x03) << 5), time);
     /* $FF1D: freq low (safe every block) */
-    apu_write_io(inst->gb_apu, 0xFF1D, (uint8_t)(freq_reg & 0xFF), time + 1);
+    gb_apu_wrapper_write(inst->gb_apu, 0xFF1D, (uint8_t)(freq_reg & 0xFF), time + 1);
     if (do_trigger) {
         /* $FF1A: DAC enable */
-        apu_write_io(inst->gb_apu, 0xFF1A, 0x80, time + 2);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF1A, 0x80, time + 2);
         /* $FF1E: trigger | freq high */
-        apu_write_io(inst->gb_apu, 0xFF1E, (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07)), time + 3);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF1E, (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07)), time + 3);
     } else {
         /* Just update freq high without trigger */
-        apu_write_io(inst->gb_apu, 0xFF1E, (uint8_t)((freq_reg >> 8) & 0x07), time + 2);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF1E, (uint8_t)((freq_reg >> 8) & 0x07), time + 2);
     }
 }
 
@@ -851,34 +925,34 @@ static void gb_write_noise(chiptune_instance_t *inst, unsigned time, int vol, in
     uint8_t poly_reg;
     gb_noise_params_from_note(note, short_mode, &poly_reg);
 
-    /* $FF21: volume | direction | pace */
-    apu_write_io(inst->gb_apu, 0xFF21, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
-    /* $FF22: clock shift | width | divisor */
-    apu_write_io(inst->gb_apu, 0xFF22, poly_reg, time + 1);
     if (do_trigger) {
-        /* $FF20: length (set to max) */
-        apu_write_io(inst->gb_apu, 0xFF20, 0x3F, time + 2);
-        /* $FF23: trigger */
-        apu_write_io(inst->gb_apu, 0xFF23, 0x80, time + 3);
+        /* Full register setup + trigger on note-on */
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF21, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF22, poly_reg, time + 1);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF20, 0x3F, time + 2);
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF23, 0x80, time + 3);
+    } else {
+        /* Just update noise params without trigger */
+        gb_apu_wrapper_write(inst->gb_apu, 0xFF22, poly_reg, time);
     }
 }
 
 static void gb_silence_channel(chiptune_instance_t *inst, int chan_idx, unsigned time) {
     switch (chan_idx) {
         case 0: /* square 1 */
-            apu_write_io(inst->gb_apu, 0xFF12, 0x00, time); /* vol=0 */
-            apu_write_io(inst->gb_apu, 0xFF14, 0x80, time + 1); /* retrigger with 0 vol */
+            gb_apu_wrapper_write(inst->gb_apu, 0xFF12, 0x00, time); /* vol=0 */
+            gb_apu_wrapper_write(inst->gb_apu, 0xFF14, 0x80, time + 1); /* retrigger with 0 vol */
             break;
         case 1: /* square 2 */
-            apu_write_io(inst->gb_apu, 0xFF17, 0x00, time);
-            apu_write_io(inst->gb_apu, 0xFF19, 0x80, time + 1);
+            gb_apu_wrapper_write(inst->gb_apu, 0xFF17, 0x00, time);
+            gb_apu_wrapper_write(inst->gb_apu, 0xFF19, 0x80, time + 1);
             break;
         case 2: /* wave */
-            apu_write_io(inst->gb_apu, 0xFF1C, 0x00, time); /* vol=0 (mute) */
+            gb_apu_wrapper_write(inst->gb_apu, 0xFF1C, 0x00, time); /* vol=0 (mute) */
             break;
         case 3: /* noise */
-            apu_write_io(inst->gb_apu, 0xFF21, 0x00, time);
-            apu_write_io(inst->gb_apu, 0xFF23, 0x80, time + 1);
+            gb_apu_wrapper_write(inst->gb_apu, 0xFF21, 0x00, time);
+            gb_apu_wrapper_write(inst->gb_apu, 0xFF23, 0x80, time + 1);
             break;
     }
 }
@@ -924,7 +998,7 @@ static void v2_destroy_instance(void *instance) {
     chiptune_instance_t *inst = (chiptune_instance_t*)instance;
     if (!inst) return;
     if (inst->gb_apu) {
-        apu_quit(inst->gb_apu);
+        gb_apu_wrapper_destroy(inst->gb_apu);
         inst->gb_apu = NULL;
     }
     delete inst;
@@ -946,15 +1020,15 @@ static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) 
     switch (status) {
         case 0x90: { /* Note On */
             if (data2 == 0) {
-                /* Velocity 0 = Note Off */
+                /* Velocity 0 = Note Off — release all voices for this note */
                 int note = (int)data1 + octave * 12;
                 if (note < 0) note = 0;
                 if (note > 127) note = 127;
-                int vi = find_voice_for_note(inst, note);
-                if (vi >= 0) {
-                    env_gate_off(&inst->voices[vi].env);
-                    /* For chiptune, note-off means immediate silence */
-                    inst->voices[vi].active = 0;
+                for (int i = 0; i < MAX_VOICES; i++) {
+                    if (inst->voices[i].active && inst->voices[i].note == note) {
+                        env_gate_off(&inst->voices[i].env);
+                        inst->voices[i].active = 0;
+                    }
                 }
                 break;
             }
@@ -986,6 +1060,7 @@ static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) 
             v->velocity = data2;
             v->channel_idx = chan;
             v->triggered = 0;  /* Will trigger on first render block */
+            v->pitch_env = inst->params[P_PITCH_ENV_DEPTH]; /* Start high, decay to 0 */
             v->age = ++inst->voice_age_counter;
 
             /* Determine channel type */
@@ -1000,43 +1075,38 @@ static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) 
             /* Configure envelope */
             int attack = (int)inst->params[P_ENV_ATTACK];
             int decay = (int)inst->params[P_ENV_DECAY];
+            int sustain = (int)inst->params[P_ENV_SUSTAIN];
+            int release = (int)inst->params[P_ENV_RELEASE];
             env_init(&v->env);
-            env_configure(&v->env, attack, decay);
+            env_configure(&v->env, attack, decay, sustain, release);
             env_gate_on(&v->env);
 
-            /* For Power Chord preset (index 9): allocate a second voice at +7 semitones */
-            if (inst->current_preset == 9 && alloc_mode == ALLOC_AUTO) {
-                /* Try to get a second pulse channel */
-                int chan2 = -1;
-                for (int ch = 0; ch < 2; ch++) {
-                    if (ch != chan) {
-                        chan2 = ch;
+            /* Auto-unison: if detune > 0 and both pulse channels available,
+             * auto-double the note to the other pulse channel for thick unison */
+            float detune_val = inst->params[P_DETUNE];
+            int ch_mask = (int)inst->params[P_CHANNEL_MASK];
+            if (detune_val > 0.0f && (ch_mask & 0x03) == 0x03 && chan < 2) {
+                int chan2 = (chan == 0) ? 1 : 0;
+                int vi2 = -1;
+                for (int i = 0; i < MAX_VOICES; i++) {
+                    if (i != vi && !inst->voices[i].active) {
+                        vi2 = i;
                         break;
                     }
                 }
-                if (chan2 >= 0) {
-                    int vi2 = -1;
-                    for (int i = 0; i < MAX_VOICES; i++) {
-                        if (i != vi && !inst->voices[i].active) {
-                            vi2 = i;
-                            break;
-                        }
-                    }
-                    if (vi2 >= 0) {
-                        voice_t *v2 = &inst->voices[vi2];
-                        int fifth_note = note + 7;
-                        if (fifth_note > 127) fifth_note = 127;
-                        v2->active = 1;
-                        v2->note = fifth_note;
-                        v2->velocity = data2;
-                        v2->channel_idx = chan2;
-                        v2->channel_type = chan2;
-                        v2->triggered = 0;
-                        v2->age = ++inst->voice_age_counter;
-                        env_init(&v2->env);
-                        env_configure(&v2->env, attack, decay);
-                        env_gate_on(&v2->env);
-                    }
+                if (vi2 >= 0) {
+                    voice_t *v2 = &inst->voices[vi2];
+                    v2->active = 1;
+                    v2->note = note;
+                    v2->velocity = data2;
+                    v2->channel_idx = chan2;
+                    v2->channel_type = chan2;
+                    v2->triggered = 0;
+                    v2->pitch_env = inst->params[P_PITCH_ENV_DEPTH];
+                    v2->age = ++inst->voice_age_counter;
+                    env_init(&v2->env);
+                    env_configure(&v2->env, attack, decay, sustain, release);
+                    env_gate_on(&v2->env);
                 }
             }
             break;
@@ -1047,22 +1117,12 @@ static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) 
             if (note < 0) note = 0;
             if (note > 127) note = 127;
 
-            /* For Power Chord, also release the fifth */
-            if (inst->current_preset == 9) {
-                int fifth_note = note + 7;
-                if (fifth_note > 127) fifth_note = 127;
-                int vi2 = find_voice_for_note(inst, fifth_note);
-                if (vi2 >= 0) {
-                    env_gate_off(&inst->voices[vi2].env);
-                    inst->voices[vi2].active = 0;
+            /* Release ALL voices matching this note (handles unison doubles) */
+            for (int i = 0; i < MAX_VOICES; i++) {
+                if (inst->voices[i].active && inst->voices[i].note == note) {
+                    env_gate_off(&inst->voices[i].env);
+                    inst->voices[i].active = 0;
                 }
-            }
-
-            int vi = find_voice_for_note(inst, note);
-            if (vi >= 0) {
-                env_gate_off(&inst->voices[vi].env);
-                /* Immediate release for chiptune */
-                inst->voices[vi].active = 0;
             }
             break;
         }
@@ -1232,23 +1292,27 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
                     "\"count_param\":\"preset_count\","
                     "\"name_param\":\"preset_name\","
                     "\"children\":\"main\","
-                    "\"knobs\":[\"duty\",\"env_attack\",\"env_decay\",\"sweep\","
-                               "\"vibrato_depth\",\"vibrato_rate\",\"noise_mode\",\"volume\"],"
+                    "\"knobs\":[\"env_attack\",\"env_decay\",\"env_sustain\",\"env_release\","
+                               "\"duty\",\"vibrato_depth\",\"vibrato_rate\",\"volume\"],"
                     "\"params\":[]"
                 "},"
                 "\"main\":{"
                     "\"label\":\"Parameters\","
                     "\"children\":null,"
-                    "\"knobs\":[\"duty\",\"env_attack\",\"env_decay\",\"sweep\","
-                               "\"vibrato_depth\",\"vibrato_rate\",\"noise_mode\",\"volume\"],"
+                    "\"knobs\":[\"env_attack\",\"env_decay\",\"env_sustain\",\"env_release\","
+                               "\"duty\",\"vibrato_depth\",\"vibrato_rate\",\"volume\"],"
                     "\"params\":["
                         "{\"key\":\"chip\",\"label\":\"Chip\"},"
                         "{\"key\":\"duty\",\"label\":\"Duty Cycle\"},"
                         "{\"key\":\"env_attack\",\"label\":\"Attack\"},"
                         "{\"key\":\"env_decay\",\"label\":\"Decay\"},"
+                        "{\"key\":\"env_sustain\",\"label\":\"Sustain\"},"
+                        "{\"key\":\"env_release\",\"label\":\"Release\"},"
                         "{\"key\":\"sweep\",\"label\":\"Sweep\"},"
                         "{\"key\":\"vibrato_depth\",\"label\":\"Vibrato Depth\"},"
                         "{\"key\":\"vibrato_rate\",\"label\":\"Vibrato Rate\"},"
+                        "{\"key\":\"pitch_env_depth\",\"label\":\"PEnv Depth\"},"
+                        "{\"key\":\"pitch_env_speed\",\"label\":\"PEnv Speed\"},"
                         "{\"key\":\"alloc_mode\",\"label\":\"Voice Mode\"},"
                         "{\"key\":\"noise_mode\",\"label\":\"Noise Mode\"},"
                         "{\"key\":\"wavetable\",\"label\":\"Wavetable (GB)\"},"
@@ -1276,6 +1340,8 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
             "{\"key\":\"duty\",\"name\":\"Duty Cycle\",\"type\":\"int\",\"min\":0,\"max\":3,\"step\":1},"
             "{\"key\":\"env_attack\",\"name\":\"Attack\",\"type\":\"int\",\"min\":0,\"max\":15,\"step\":1},"
             "{\"key\":\"env_decay\",\"name\":\"Decay\",\"type\":\"int\",\"min\":0,\"max\":15,\"step\":1},"
+            "{\"key\":\"env_sustain\",\"name\":\"Sustain\",\"type\":\"int\",\"min\":0,\"max\":15,\"step\":1},"
+            "{\"key\":\"env_release\",\"name\":\"Release\",\"type\":\"int\",\"min\":0,\"max\":15,\"step\":1},"
             "{\"key\":\"sweep\",\"name\":\"Sweep\",\"type\":\"int\",\"min\":0,\"max\":7,\"step\":1},"
             "{\"key\":\"vibrato_depth\",\"name\":\"Vibrato Depth\",\"type\":\"int\",\"min\":0,\"max\":12,\"step\":1},"
             "{\"key\":\"vibrato_rate\",\"name\":\"Vibrato Rate\",\"type\":\"int\",\"min\":0,\"max\":10,\"step\":1},"
@@ -1283,7 +1349,9 @@ static int v2_get_param(void *instance, const char *key, char *buf, int buf_len)
             "{\"key\":\"channel_mask\",\"name\":\"Channel Mask\",\"type\":\"int\",\"min\":0,\"max\":15,\"step\":1},"
             "{\"key\":\"detune\",\"name\":\"Detune\",\"type\":\"int\",\"min\":0,\"max\":50,\"step\":1},"
             "{\"key\":\"volume\",\"name\":\"Volume\",\"type\":\"int\",\"min\":0,\"max\":15,\"step\":1},"
-            "{\"key\":\"octave_transpose\",\"name\":\"Octave\",\"type\":\"int\",\"min\":-3,\"max\":3,\"step\":1}"
+            "{\"key\":\"octave_transpose\",\"name\":\"Octave\",\"type\":\"int\",\"min\":-3,\"max\":3,\"step\":1},"
+            "{\"key\":\"pitch_env_depth\",\"name\":\"PEnv Depth\",\"type\":\"int\",\"min\":0,\"max\":24,\"step\":1},"
+            "{\"key\":\"pitch_env_speed\",\"name\":\"PEnv Speed\",\"type\":\"int\",\"min\":0,\"max\":15,\"step\":1}"
             "]");
         if (offset >= buf_len) return -1;
         return offset;
@@ -1382,14 +1450,22 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
             float base_freq = midi_to_freq(v->note);
             /* Apply pitch bend */
             base_freq *= powf(2.0f, inst->pitch_bend_semitones / 12.0f);
+            /* Apply pitch envelope (e.g., kick drum pitch drop) */
+            if (v->pitch_env > 0.01f) {
+                base_freq *= powf(2.0f, v->pitch_env / 12.0f);
+                float penv_speed = inst->params[P_PITCH_ENV_SPEED];
+                if (penv_speed > 0.0f) {
+                    float decay_per_sample = v->pitch_env / (penv_speed * (SAMPLE_RATE / 60.0f));
+                    v->pitch_env -= decay_per_sample * frames;
+                    if (v->pitch_env < 0.0f) v->pitch_env = 0.0f;
+                }
+            }
             /* Apply vibrato */
             float freq = base_freq * vib_mult;
 
             /* Apply detune for second pulse channel in duo mode */
-            float freq2 = freq;
             if (detune_cents > 0.0f && v->channel_idx == 1) {
-                freq2 = freq * powf(2.0f, detune_cents / 1200.0f);
-                freq = freq2;
+                freq *= powf(2.0f, detune_cents / 1200.0f);
             }
 
             /* Compute APU volume from envelope */
@@ -1473,6 +1549,12 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
         /* ---- GB rendering ---- */
         unsigned gb_time = 0;
 
+        /* Compute combined envelope level for output scaling.
+         * GB channels trigger once at full volume; we scale the final output
+         * by the software envelope instead of re-triggering every block. */
+        float gb_env_level = 0.0f;
+        int gb_active_count = 0;
+
         for (int vi = 0; vi < MAX_VOICES; vi++) {
             voice_t *v = &inst->voices[vi];
             if (!v->active) continue;
@@ -1493,6 +1575,10 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
                 continue;
             }
 
+            /* Track envelope for output scaling */
+            gb_env_level += avg_level;
+            gb_active_count++;
+
             /* Compute vibrato */
             float vib_mult = 1.0f;
             if (vib_depth > 0.0f && vib_rate > 0.0f) {
@@ -1503,6 +1589,16 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
             /* Base frequency */
             float base_freq = midi_to_freq(v->note);
             base_freq *= powf(2.0f, inst->pitch_bend_semitones / 12.0f);
+            /* Apply pitch envelope */
+            if (v->pitch_env > 0.01f) {
+                base_freq *= powf(2.0f, v->pitch_env / 12.0f);
+                float penv_speed = inst->params[P_PITCH_ENV_SPEED];
+                if (penv_speed > 0.0f) {
+                    float decay_per_sample = v->pitch_env / (penv_speed * (SAMPLE_RATE / 60.0f));
+                    v->pitch_env -= decay_per_sample * frames;
+                    if (v->pitch_env < 0.0f) v->pitch_env = 0.0f;
+                }
+            }
             float freq = base_freq * vib_mult;
 
             /* Detune for second square channel */
@@ -1510,23 +1606,21 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
                 freq *= powf(2.0f, detune_cents / 1200.0f);
             }
 
-            /* Compute volume */
-            int gb_vol = (int)(avg_level * (float)preset_vol / 15.0f * 15.0f + 0.5f);
-            if (gb_vol > 15) gb_vol = 15;
-            if (gb_vol < 0) gb_vol = 0;
-            gb_vol = (gb_vol * v->velocity) / 127;
-            if (gb_vol > 15) gb_vol = 15;
-
-            /* Write to appropriate GB channel */
+            /* Volume: on trigger, set to preset volume. On subsequent blocks,
+             * volume stays at whatever the APU has (we scale output instead). */
             int do_trigger = !v->triggered;
+            int gb_vol = (int)((float)preset_vol * (float)v->velocity / 127.0f + 0.5f);
+            if (gb_vol > 15) gb_vol = 15;
+            if (gb_vol < 1) gb_vol = 1;  /* Keep DAC enabled (0 disables DAC) */
+
             switch (v->channel_idx) {
                 case 0:
                     gb_write_square1(inst, gb_time, duty, gb_vol, freq, sweep, do_trigger);
-                    gb_time += 5;
+                    gb_time += do_trigger ? 5 : 2;
                     break;
                 case 1:
                     gb_write_square2(inst, gb_time, duty, gb_vol, freq, do_trigger);
-                    gb_time += 4;
+                    gb_time += do_trigger ? 4 : 2;
                     break;
                 case 2: /* wave */
                     gb_write_wave(inst, gb_time, gb_vol, freq, do_trigger);
@@ -1534,7 +1628,7 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
                     break;
                 case 3: /* noise */
                     gb_write_noise(inst, gb_time, gb_vol, v->note, noise_mode, do_trigger);
-                    gb_time += 4;
+                    gb_time += do_trigger ? 4 : 1;
                     break;
             }
             v->triggered = 1;
@@ -1561,43 +1655,32 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
             while (inst->lfo_phase >= 1.0f) inst->lfo_phase -= 1.0f;
         }
 
-        /* Run GB APU: clock frame sequencer at 512 Hz intervals */
-        unsigned total_cycles = GB_CYCLES_PER_BLOCK;
-        unsigned clock = inst->gb_frame_seq_counter;
-        unsigned elapsed = 0;
+        /* Run GB APU for this block — blargg handles frame sequencer internally */
+        long total_cycles = GB_CYCLES_PER_BLOCK;
+        gb_apu_wrapper_end_frame(inst->gb_apu, total_cycles);
 
-        while (elapsed < total_cycles) {
-            unsigned next_seq = GB_FRAME_SEQ_PERIOD - clock;
-            if (elapsed + next_seq <= total_cycles) {
-                elapsed += next_seq;
-                apu_frame_sequencer_clock(inst->gb_apu, elapsed);
-                clock = 0;
-            } else {
-                clock += (total_cycles - elapsed);
-                elapsed = total_cycles;
-            }
+        /* Compute output envelope scale. For mono voices, this is the
+         * voice's envelope level. For poly, average across active voices. */
+        float env_scale = 1.0f;
+        if (gb_active_count > 0) {
+            env_scale = gb_env_level / (float)gb_active_count;
         }
-        inst->gb_frame_seq_counter = clock;
-
-        apu_end_frame(inst->gb_apu, total_cycles);
-        /* Reset timestamps to match the clock reset done inside apu_end_frame */
-        apu_update_timestamp(inst->gb_apu, -(int)total_cycles);
 
         /* Read stereo samples */
-        int avail = apu_samples_avaliable(inst->gb_apu);
+        int avail = gb_apu_wrapper_samples_avail(inst->gb_apu);
         /* avail is count of shorts (stereo pairs * 2) */
         int stereo_shorts = frames * 2;
         if (avail < stereo_shorts) stereo_shorts = avail;
         if (stereo_shorts > 0) {
             memset(inst->gb_stereo_buf, 0, sizeof(inst->gb_stereo_buf));
-            int read_count = apu_read_samples(inst->gb_apu, inst->gb_stereo_buf, stereo_shorts);
+            int read_count = gb_apu_wrapper_read_samples(inst->gb_apu, inst->gb_stereo_buf, stereo_shorts);
 
-            /* Copy to output with scaling. GB APU output peaks ~8000; 4x scales
-             * to ~32000 for good headroom within int16 range. */
+            /* Copy to output with scaling. Boost GB to match NES loudness.
+             * Apply software envelope scaling (since we don't re-trigger for volume). */
             int sample_pairs = read_count / 2;
             for (int s = 0; s < sample_pairs && s < frames; s++) {
-                int32_t left = (int32_t)inst->gb_stereo_buf[s * 2] * 4;
-                int32_t right = (int32_t)inst->gb_stereo_buf[s * 2 + 1] * 4;
+                int32_t left = (int32_t)((float)inst->gb_stereo_buf[s * 2] * 6.0f * env_scale);
+                int32_t right = (int32_t)((float)inst->gb_stereo_buf[s * 2 + 1] * 6.0f * env_scale);
                 if (left > 32767) left = 32767;
                 if (left < -32768) left = -32768;
                 if (right > 32767) right = 32767;

@@ -6,7 +6,7 @@
             "module": "chiptune",
             "config": {
                 "state": {
-                    "preset": 11,
+                    "preset": 16,
                     "chip": 1,
                     "alloc_mode": 0,
                     "duty": 2,

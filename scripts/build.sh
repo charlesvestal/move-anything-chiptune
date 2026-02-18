@@ -64,36 +64,43 @@ for src in $NES_SRCS; do
         -o "$obj"
 done
 
-# Compile GB APU library (C)
-echo "Compiling GB APU library..."
-echo "  src/libs/gb_apu/gb_apu.c -> build/gb_apu.o"
-${CROSS_PREFIX}gcc -g -O3 -fPIC \
-    -I src/libs/gb_apu \
-    -c src/libs/gb_apu/gb_apu.c \
-    -o build/gb_apu.o
+# Compile GB APU library (blargg's Gb_Snd_Emu, C++)
+echo "Compiling GB APU library (blargg)..."
+GB_SRCS="
+    src/libs/gb_snd_emu/Gb_Apu.cpp
+    src/libs/gb_snd_emu/Gb_Oscs.cpp
+    src/libs/gb_snd_emu/Blip_Buffer.cpp
+    src/libs/gb_snd_emu/Multi_Buffer.cpp
+    src/libs/gb_snd_emu/gb_apu_wrapper.cpp
+"
 
-# Compile GB APU blip_buf dependency (C)
-echo "  src/libs/gb_apu/blargg/blip_buf.c -> build/gb_blip_buf.o"
-${CROSS_PREFIX}gcc -g -O3 -fPIC \
-    -I src/libs/gb_apu/blargg \
-    -c src/libs/gb_apu/blargg/blip_buf.c \
-    -o build/gb_blip_buf.o
+for src in $GB_SRCS; do
+    obj="build/gb_$(basename "$src" .cpp).o"
+    echo "  $src -> $obj"
+    ${CROSS_PREFIX}g++ -g -O3 -fPIC -std=c++14 -fvisibility=hidden \
+        -I src/libs/gb_snd_emu \
+        -c "$src" \
+        -o "$obj"
+done
 
-echo "  src/libs/gb_apu/blargg/blip_wrap.c -> build/blip_wrap.o"
-${CROSS_PREFIX}gcc -g -O3 -fPIC \
-    -I src/libs/gb_apu \
-    -I src/libs/gb_apu/blargg \
-    -Wno-unused-function \
-    -c src/libs/gb_apu/blargg/blip_wrap.c \
-    -o build/blip_wrap.o
+# Partial-link GB objects into one .o so hidden Blip_Buffer symbols
+# don't collide with NES Blip_Buffer at final link
+echo "Partial-linking GB APU objects..."
+${CROSS_PREFIX}ld -r \
+    build/gb_Gb_Apu.o \
+    build/gb_Gb_Oscs.o \
+    build/gb_Blip_Buffer.o \
+    build/gb_Multi_Buffer.o \
+    build/gb_gb_apu_wrapper.o \
+    -o build/gb_apu_combined.o
+${CROSS_PREFIX}objcopy --localize-hidden build/gb_apu_combined.o
 
 # Compile plugin wrapper (C++)
 echo "Compiling plugin wrapper..."
 ${CROSS_PREFIX}g++ -g -O3 -fPIC -std=c++14 \
     -I src/dsp \
     -I src/libs/nes_snd_emu \
-    -I src/libs/gb_apu \
-    -I src/libs/gb_apu/blargg \
+    -I src/libs/gb_snd_emu \
     -c src/dsp/chiptune_plugin.cpp \
     -o build/chiptune_plugin.o
 
@@ -104,9 +111,7 @@ ${CROSS_PREFIX}g++ -shared \
     build/Nes_Apu.o \
     build/Nes_Oscs.o \
     build/Blip_Buffer.o \
-    build/gb_apu.o \
-    build/gb_blip_buf.o \
-    build/blip_wrap.o \
+    build/gb_apu_combined.o \
     -o build/dsp.so \
     -lm
 
