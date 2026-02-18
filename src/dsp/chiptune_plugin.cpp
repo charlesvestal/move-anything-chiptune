@@ -746,7 +746,18 @@ static int allocate_voice(chiptune_instance_t *inst) {
     for (int i = 0; i < MAX_VOICES; i++) {
         if (!inst->voices[i].active) return i;
     }
-    /* Steal oldest */
+    /* Prefer stealing a releasing voice (oldest first) */
+    int oldest_rel = -1;
+    int oldest_rel_age = 0x7FFFFFFF;
+    for (int i = 0; i < MAX_VOICES; i++) {
+        if (inst->voices[i].env.stage == ENV_RELEASE &&
+            inst->voices[i].age < oldest_rel_age) {
+            oldest_rel_age = inst->voices[i].age;
+            oldest_rel = i;
+        }
+    }
+    if (oldest_rel >= 0) return oldest_rel;
+    /* Steal oldest active voice */
     int oldest = 0;
     int oldest_age = inst->voices[0].age;
     for (int i = 1; i < MAX_VOICES; i++) {
@@ -863,10 +874,12 @@ static void gb_load_wavetable(chiptune_instance_t *inst, int wave_idx, unsigned 
 static void gb_write_square1(chiptune_instance_t *inst, unsigned time,
                              int duty, int vol, float freq, int sweep, int do_trigger) {
     int freq_reg = gb_square_freq_reg(freq);
+    /* Always write volume + freq; trigger only on note-on.
+     * Writing FF12 (envelope) requires re-trigger to take effect on real HW,
+     * but blargg's emulator applies it immediately. */
+    gb_apu_wrapper_write(inst->gb_apu, 0xFF12, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
+    gb_apu_wrapper_write(inst->gb_apu, 0xFF13, (uint8_t)(freq_reg & 0xFF), time + 1);
     if (do_trigger) {
-        /* Full register setup + trigger on note-on */
-        gb_apu_wrapper_write(inst->gb_apu, 0xFF12, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
-        gb_apu_wrapper_write(inst->gb_apu, 0xFF13, (uint8_t)(freq_reg & 0xFF), time + 1);
         uint8_t sweep_reg = 0x00;
         if (sweep > 0) {
             sweep_reg = (uint8_t)(((sweep & 0x07) << 4) | 0x02);
@@ -874,26 +887,18 @@ static void gb_write_square1(chiptune_instance_t *inst, unsigned time,
         gb_apu_wrapper_write(inst->gb_apu, 0xFF10, sweep_reg, time + 2);
         gb_apu_wrapper_write(inst->gb_apu, 0xFF11, (uint8_t)(((duty & 0x03) << 6) | 0x3F), time + 3);
         gb_apu_wrapper_write(inst->gb_apu, 0xFF14, (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07)), time + 4);
-    } else {
-        /* Just update frequency (for vibrato/pitch bend) — no trigger */
-        gb_apu_wrapper_write(inst->gb_apu, 0xFF13, (uint8_t)(freq_reg & 0xFF), time);
-        gb_apu_wrapper_write(inst->gb_apu, 0xFF14, (uint8_t)((freq_reg >> 8) & 0x07), time + 1);
     }
 }
 
 static void gb_write_square2(chiptune_instance_t *inst, unsigned time,
                              int duty, int vol, float freq, int do_trigger) {
     int freq_reg = gb_square_freq_reg(freq);
+    /* Always write volume + freq */
+    gb_apu_wrapper_write(inst->gb_apu, 0xFF17, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
+    gb_apu_wrapper_write(inst->gb_apu, 0xFF18, (uint8_t)(freq_reg & 0xFF), time + 1);
     if (do_trigger) {
-        /* Full register setup + trigger on note-on */
-        gb_apu_wrapper_write(inst->gb_apu, 0xFF17, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
-        gb_apu_wrapper_write(inst->gb_apu, 0xFF18, (uint8_t)(freq_reg & 0xFF), time + 1);
         gb_apu_wrapper_write(inst->gb_apu, 0xFF16, (uint8_t)(((duty & 0x03) << 6) | 0x3F), time + 2);
         gb_apu_wrapper_write(inst->gb_apu, 0xFF19, (uint8_t)(0x80 | ((freq_reg >> 8) & 0x07)), time + 3);
-    } else {
-        /* Just update frequency — no trigger */
-        gb_apu_wrapper_write(inst->gb_apu, 0xFF18, (uint8_t)(freq_reg & 0xFF), time);
-        gb_apu_wrapper_write(inst->gb_apu, 0xFF19, (uint8_t)((freq_reg >> 8) & 0x07), time + 1);
     }
 }
 
@@ -925,15 +930,12 @@ static void gb_write_noise(chiptune_instance_t *inst, unsigned time, int vol, in
     uint8_t poly_reg;
     gb_noise_params_from_note(note, short_mode, &poly_reg);
 
+    /* Always write volume */
+    gb_apu_wrapper_write(inst->gb_apu, 0xFF21, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
+    gb_apu_wrapper_write(inst->gb_apu, 0xFF22, poly_reg, time + 1);
     if (do_trigger) {
-        /* Full register setup + trigger on note-on */
-        gb_apu_wrapper_write(inst->gb_apu, 0xFF21, (uint8_t)(((vol & 0x0F) << 4) | 0x00), time);
-        gb_apu_wrapper_write(inst->gb_apu, 0xFF22, poly_reg, time + 1);
         gb_apu_wrapper_write(inst->gb_apu, 0xFF20, 0x3F, time + 2);
         gb_apu_wrapper_write(inst->gb_apu, 0xFF23, 0x80, time + 3);
-    } else {
-        /* Just update noise params without trigger */
-        gb_apu_wrapper_write(inst->gb_apu, 0xFF22, poly_reg, time);
     }
 }
 
@@ -1117,11 +1119,12 @@ static void v2_on_midi(void *instance, const uint8_t *msg, int len, int source) 
             if (note < 0) note = 0;
             if (note > 127) note = 127;
 
-            /* Release ALL voices matching this note (handles unison doubles) */
+            /* Release ALL voices matching this note (handles unison doubles).
+             * Don't set active=0 here — let the envelope release phase play out.
+             * The render loop sets active=0 when the envelope reaches ENV_IDLE. */
             for (int i = 0; i < MAX_VOICES; i++) {
                 if (inst->voices[i].active && inst->voices[i].note == note) {
                     env_gate_off(&inst->voices[i].env);
-                    inst->voices[i].active = 0;
                 }
             }
             break;
@@ -1421,14 +1424,12 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
             voice_t *v = &inst->voices[vi];
             if (!v->active) continue;
 
-            /* Block-rate envelope: sample level at start of block for APU volume.
-             * This gives chiptune-authentic staircase envelope behavior (~2.9ms steps). */
-            float avg_level = v->env.level;
-
-            /* Advance envelope state through the block (per-sample values unused) */
+            /* Advance envelope through the block, then sample the level.
+             * Block-rate updates give chiptune-authentic staircase behavior (~2.9ms steps). */
             for (int s = 0; s < frames; s++) {
                 env_process(&v->env);
             }
+            float avg_level = v->env.level;
 
             /* If envelope finished, mark voice inactive */
             if (v->env.stage == ENV_IDLE) {
@@ -1549,23 +1550,18 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
         /* ---- GB rendering ---- */
         unsigned gb_time = 0;
 
-        /* Compute combined envelope level for output scaling.
-         * GB channels trigger once at full volume; we scale the final output
-         * by the software envelope instead of re-triggering every block. */
-        float gb_env_level = 0.0f;
-        int gb_active_count = 0;
+        /* Envelope is now applied via APU volume registers directly,
+         * same as the NES path. No output-level scaling needed. */
 
         for (int vi = 0; vi < MAX_VOICES; vi++) {
             voice_t *v = &inst->voices[vi];
             if (!v->active) continue;
 
-            /* Sample envelope level at start of block */
-            float avg_level = v->env.level;
-
-            /* Advance envelope through block */
+            /* Advance envelope through block, then sample level */
             for (int s = 0; s < frames; s++) {
                 env_process(&v->env);
             }
+            float avg_level = v->env.level;
 
             /* If envelope finished, mark voice inactive */
             if (v->env.stage == ENV_IDLE) {
@@ -1575,9 +1571,6 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
                 continue;
             }
 
-            /* Track envelope for output scaling */
-            gb_env_level += avg_level;
-            gb_active_count++;
 
             /* Compute vibrato */
             float vib_mult = 1.0f;
@@ -1606,12 +1599,16 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
                 freq *= powf(2.0f, detune_cents / 1200.0f);
             }
 
-            /* Volume: on trigger, set to preset volume. On subsequent blocks,
-             * volume stays at whatever the APU has (we scale output instead). */
+            /* Compute APU volume from envelope (same as NES path) */
             int do_trigger = !v->triggered;
-            int gb_vol = (int)((float)preset_vol * (float)v->velocity / 127.0f + 0.5f);
+            int gb_vol = (int)(avg_level * (float)preset_vol / 15.0f * 15.0f + 0.5f);
             if (gb_vol > 15) gb_vol = 15;
-            if (gb_vol < 1) gb_vol = 1;  /* Keep DAC enabled (0 disables DAC) */
+            if (gb_vol < 0) gb_vol = 0;
+            /* Scale by velocity */
+            gb_vol = (gb_vol * v->velocity) / 127;
+            if (gb_vol > 15) gb_vol = 15;
+            /* Keep DAC enabled while voice is active (vol 0 disables DAC on some channels) */
+            if (gb_vol < 1 && v->env.stage != ENV_IDLE) gb_vol = 1;
 
             switch (v->channel_idx) {
                 case 0:
@@ -1628,7 +1625,7 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
                     break;
                 case 3: /* noise */
                     gb_write_noise(inst, gb_time, gb_vol, v->note, noise_mode, do_trigger);
-                    gb_time += do_trigger ? 4 : 1;
+                    gb_time += do_trigger ? 4 : 2;
                     break;
             }
             v->triggered = 1;
@@ -1659,13 +1656,6 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
         long total_cycles = GB_CYCLES_PER_BLOCK;
         gb_apu_wrapper_end_frame(inst->gb_apu, total_cycles);
 
-        /* Compute output envelope scale. For mono voices, this is the
-         * voice's envelope level. For poly, average across active voices. */
-        float env_scale = 1.0f;
-        if (gb_active_count > 0) {
-            env_scale = gb_env_level / (float)gb_active_count;
-        }
-
         /* Read stereo samples */
         int avail = gb_apu_wrapper_samples_avail(inst->gb_apu);
         /* avail is count of shorts (stereo pairs * 2) */
@@ -1675,12 +1665,11 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
             memset(inst->gb_stereo_buf, 0, sizeof(inst->gb_stereo_buf));
             int read_count = gb_apu_wrapper_read_samples(inst->gb_apu, inst->gb_stereo_buf, stereo_shorts);
 
-            /* Copy to output with scaling. Boost GB to match NES loudness.
-             * Apply software envelope scaling (since we don't re-trigger for volume). */
+            /* Copy to output with gain boost to match NES loudness */
             int sample_pairs = read_count / 2;
             for (int s = 0; s < sample_pairs && s < frames; s++) {
-                int32_t left = (int32_t)((float)inst->gb_stereo_buf[s * 2] * 6.0f * env_scale);
-                int32_t right = (int32_t)((float)inst->gb_stereo_buf[s * 2 + 1] * 6.0f * env_scale);
+                int32_t left = (int32_t)inst->gb_stereo_buf[s * 2] * 6;
+                int32_t right = (int32_t)inst->gb_stereo_buf[s * 2 + 1] * 6;
                 if (left > 32767) left = 32767;
                 if (left < -32768) left = -32768;
                 if (right > 32767) right = 32767;
