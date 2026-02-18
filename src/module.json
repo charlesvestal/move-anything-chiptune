@@ -2,7 +2,7 @@
   "id": "chiptune",
   "name": "Chiptune",
   "abbrev": "CT",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "NES & Game Boy chiptune synthesizer",
   "author": "charlesvestal",
   "license": "MIT/LGPL-2.1",
