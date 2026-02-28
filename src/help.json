@@ -1,0 +1,221 @@
+{
+  "title": "Chiptune",
+  "children": [
+    {
+      "title": "Overview",
+      "lines": [
+        "NES and Game Boy",
+        "chiptune synthesizer.",
+        "",
+        "Authentic 8-bit sound",
+        "via band-limited",
+        "chip emulation.",
+        "",
+        "NES 2A03: 2 pulse,",
+        " 1 triangle, 1 noise",
+        "",
+        "Game Boy DMG:",
+        " 2 pulse, 1 wave,",
+        " 1 noise",
+        "",
+        "Up to 5 voices.",
+        "32 factory presets."
+      ]
+    },
+    {
+      "title": "Controls",
+      "children": [
+        {
+          "title": "Knob Mapping",
+          "lines": [
+            "Knob 1: Attack",
+            "Knob 2: Decay",
+            "Knob 3: Sustain",
+            "Knob 4: Release",
+            " Envelope ADSR",
+            " (0-15 each)",
+            "",
+            "Knob 5: Duty Cycle",
+            " Pulse wave shape",
+            " 0: 12.5% (thin)",
+            " 1: 25%",
+            " 2: 50% (square)",
+            " 3: 75%",
+            "",
+            "Knob 6: Vibrato Dep",
+            "Knob 7: Vibrato Rate",
+            "Knob 8: Volume"
+          ]
+        },
+        {
+          "title": "Chip & Channels",
+          "lines": [
+            "Chip: NES or GB",
+            " Selects emulation",
+            "",
+            "Channel Mask:",
+            " Bit 0: Pulse 1",
+            " Bit 1: Pulse 2",
+            " Bit 2: Tri (NES)",
+            "        Wave (GB)",
+            " Bit 3: Noise",
+            "",
+            "Examples:",
+            " 1: mono pulse",
+            " 3: 2-voice poly",
+            " 7: 3-voice poly",
+            " 15: all 4 channels",
+            " 4: triangle/wave",
+            " 8: noise only"
+          ]
+        },
+        {
+          "title": "Voice Modes",
+          "lines": [
+            "Alloc Mode:",
+            "",
+            "Auto: round-robin",
+            " Good for chords",
+            " and polyphony.",
+            " Steals oldest voice",
+            " when full.",
+            "",
+            "Lead: monophonic",
+            " Kills all voices on",
+            " each new note.",
+            " Best for solos.",
+            "",
+            "Locked: fixed",
+            " Each channel locked",
+            " to one voice."
+          ]
+        },
+        {
+          "title": "Pitch Effects",
+          "lines": [
+            "Pitch Env Depth:",
+            " 0-24 semitones of",
+            " initial pitch rise",
+            " above target note.",
+            "",
+            "Pitch Env Speed:",
+            " How fast pitch",
+            " decays to target.",
+            " 1=fast, 15=slow",
+            "",
+            "Great for kicks,",
+            "zaps, and punchy",
+            "attack sounds.",
+            "",
+            "Detune: 0-50 cents",
+            " When both pulse",
+            " channels are on,",
+            " auto-doubles notes",
+            " for thick unison."
+          ]
+        },
+        {
+          "title": "GB Wavetables",
+          "lines": [
+            "Game Boy wave",
+            "channel waveforms:",
+            "",
+            "0: Sawtooth",
+            "1: Square",
+            "2: Triangle",
+            "3: Sine-ish",
+            "4: Pulse",
+            "5: Bass",
+            "6: Growl",
+            "7: Metallic",
+            "",
+            "Only active when",
+            "GB chip is selected",
+            "and wave channel",
+            "(bit 2) is enabled."
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Envelope",
+      "lines": [
+        "4-stage ADSR:",
+        "",
+        "Attack: 0-15",
+        " 0 = instant",
+        " 15 = ~250ms ramp",
+        "",
+        "Decay: 0-15",
+        " 0 = instant",
+        " 15 = ~1 second",
+        "",
+        "Sustain: 0-15",
+        " Held level.",
+        " 0 = AD-only mode",
+        " (great for drums)",
+        "",
+        "Release: 0-15",
+        " Fade after note off"
+      ]
+    },
+    {
+      "title": "MIDI",
+      "lines": [
+        "Pitch Bend:",
+        " +/- 2 semitones",
+        "",
+        "Mod Wheel (CC 1):",
+        " Vibrato depth",
+        "",
+        "CC 123/120:",
+        " All notes off",
+        "",
+        "Octave Transpose:",
+        " -3 to +3 via menu"
+      ]
+    },
+    {
+      "title": "NES Presets",
+      "lines": [
+        " 0: NES Lead",
+        " 1: NES Bright",
+        " 2: NES Thin",
+        " 3: NES Pad",
+        " 4: NES Pluck",
+        " 5: NES Stab",
+        " 6: NES Poly",
+        " 7: NES Poly Bright",
+        " 8: NES Unison",
+        " 9: NES Brass",
+        "10: Tri Bass",
+        "11: Tri Kick",
+        "12: NES Bell",
+        "13: NES Hat",
+        "14: NES Snare",
+        "15: NES Zap"
+      ]
+    },
+    {
+      "title": "GB Presets",
+      "lines": [
+        "16: GB Lead",
+        "17: GB Bright",
+        "18: GB Thin",
+        "19: GB Poly",
+        "20: GB Poly Bright",
+        "21: GB Unison",
+        "22: GB Vibrato",
+        "23: GB Pluck",
+        "24: GB Pad",
+        "25: Wave Bass",
+        "26: Wave Pad",
+        "27: Wave Sub",
+        "28: Wave Growl",
+        "29: Wave Metal",
+        "30: GB Brass",
+        "31: GB Bell"
+      ]
+    }
+  ]
+}

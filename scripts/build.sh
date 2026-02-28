@@ -118,6 +118,7 @@ ${CROSS_PREFIX}g++ -shared \
 # Copy files to dist (use cat to avoid ExtFS deallocation issues with Docker)
 echo "Packaging..."
 cat src/module.json > dist/chiptune/module.json
+[ -f src/help.json ] && cat src/help.json > dist/chiptune/help.json
 cat build/dsp.so > dist/chiptune/dsp.so
 chmod +x dist/chiptune/dsp.so
 
