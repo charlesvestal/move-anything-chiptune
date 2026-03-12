@@ -1,6 +1,6 @@
 # Chiptune for Move Everything
 
-NES and Game Boy chiptune synthesizer for [Move Everything](https://github.com/charlesvestal/move-anything).
+NES and Game Boy chiptune synthesizer for [Move Everything](https://github.com/charlesvestal/move-everything).
 
 ## Emulation
 
@@ -32,7 +32,7 @@ Both libraries use Blip_Buffer for band-limited sample generation, producing cle
 
 ## Prerequisites
 
-- [Move Everything](https://github.com/charlesvestal/move-anything) installed on your Ableton Move
+- [Move Everything](https://github.com/charlesvestal/move-everything) installed on your Ableton Move
 - SSH access enabled: http://move.local/development/ssh
 
 ## Install
@@ -49,7 +49,7 @@ Both libraries use Blip_Buffer for band-limited sample generation, producing cle
 Requires Docker (recommended) or ARM64 cross-compiler.
 
 ```bash
-git clone --recursive https://github.com/charlesvestal/move-anything-chiptune
+git clone --recursive https://github.com/charlesvestal/move-everything-chiptune
 cd move-anything-chiptune
 ./scripts/build.sh
 ./scripts/install.sh
