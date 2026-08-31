@@ -1535,10 +1535,15 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
             memset(inst->nes_mono_buf, 0, sizeof(inst->nes_mono_buf));
             inst->nes_blip.read_samples(inst->nes_mono_buf, to_read);
 
-            /* Convert mono to stereo. NES APU output peaks ~5000; 6x scales to ~30000
-             * for good headroom within int16 range. */
+            /* Convert mono to stereo at unity. The APU's own output is already
+             * at a sane level: a single voice peaks ~7300 and the loudest poly
+             * preset ~19000, so measured RMS lands at -14..-23 dBFS, in the same
+             * range as Braids and Open303. An earlier 6x boost here assumed the
+             * APU peaked at ~5000 and clipped 26 of the 32 presets flat against
+             * the int16 ceiling (GB Unison: 43% of samples clipped). The clamp
+             * below stays as a backstop, not as the operating point. */
             for (int s = 0; s < to_read; s++) {
-                int32_t sample = (int32_t)inst->nes_mono_buf[s] * 6;
+                int32_t sample = (int32_t)inst->nes_mono_buf[s];
                 if (sample > 32767) sample = 32767;
                 if (sample < -32768) sample = -32768;
                 out_interleaved_lr[s * 2] = (int16_t)sample;
@@ -1665,11 +1670,12 @@ static void v2_render_block(void *instance, int16_t *out_interleaved_lr, int fra
             memset(inst->gb_stereo_buf, 0, sizeof(inst->gb_stereo_buf));
             int read_count = gb_apu_wrapper_read_samples(inst->gb_apu, inst->gb_stereo_buf, stereo_shorts);
 
-            /* Copy to output with gain boost to match NES loudness */
+            /* Copy to output at unity — the GB APU already matches the NES path
+             * within a couple of dB, so no boost is needed to balance them. */
             int sample_pairs = read_count / 2;
             for (int s = 0; s < sample_pairs && s < frames; s++) {
-                int32_t left = (int32_t)inst->gb_stereo_buf[s * 2] * 6;
-                int32_t right = (int32_t)inst->gb_stereo_buf[s * 2 + 1] * 6;
+                int32_t left = (int32_t)inst->gb_stereo_buf[s * 2];
+                int32_t right = (int32_t)inst->gb_stereo_buf[s * 2 + 1];
                 if (left > 32767) left = 32767;
                 if (left < -32768) left = -32768;
                 if (right > 32767) right = 32767;
